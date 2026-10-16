@@ -279,22 +279,49 @@ func (w *window) sidebar(c *ui.Context) {
 		}
 
 		if w.sidebarProjectsShown {
+			// Animation progress for position swap
+			const swapAnimDuration = 240 * time.Millisecond
+			var topOffset, bottomOffset float32
+			var panelOpacity float32 = 1.0
+			if !w.swapAnimStart.IsZero() {
+				elapsed := time.Since(w.swapAnimStart)
+				if elapsed < swapAnimDuration {
+					c.AnimationFrame()
+					norm := float32(elapsed) / float32(swapAnimDuration)
+					ease := ui.EaseInOut(norm)
+					const shiftDist = float32(20)
+					if norm < 0.5 {
+						phase := ease * 2
+						topOffset = phase * shiftDist
+						bottomOffset = -phase * shiftDist
+						panelOpacity = 1.0 - phase*0.4
+					} else {
+						phase := (1.0 - ease) * 2
+						topOffset = -phase * shiftDist
+						bottomOffset = phase * shiftDist
+						panelOpacity = 1.0 - phase*0.4
+					}
+				} else {
+					w.swapAnimStart = time.Time{}
+				}
+			}
+
 			// Shared sidebar split mode: popover button hidden
 			if w.sidebarProjectsOnTop {
 				// Default: Projects list on top, Tab views below
-				w.sidebarProjectsPanel(c, pal, h, false)
+				w.sidebarProjectsPanel(c, pal, h, false, topOffset, panelOpacity)
 				w.sidebarProjectsResizer(c, pal)
-				w.sidebarTabPanel(c, pal, 0, true)
+				w.sidebarTabPanel(c, pal, 0, true, bottomOffset, panelOpacity)
 			} else {
 				// Swapped: Tab views on top, Projects list below
-				w.sidebarTabPanel(c, pal, 0, true)
+				w.sidebarTabPanel(c, pal, 0, true, topOffset, panelOpacity)
 				w.sidebarProjectsResizer(c, pal)
-				w.sidebarProjectsPanel(c, pal, h, false)
+				w.sidebarProjectsPanel(c, pal, h, false, bottomOffset, panelOpacity)
 			}
 		} else {
 			// Normal single panel mode with popover button
 			w.projectBar(c, pal)
-			w.sidebarTabPanel(c, pal, 0, true)
+			w.sidebarTabPanel(c, pal, 0, true, 0, 1.0)
 		}
 
 		w.sidebarFooter(c, pal)
@@ -327,12 +354,18 @@ func (w *window) sidebarProjectsSwitch(c *ui.Context, pal *palette) {
 }
 
 // sidebarProjectsPanel renders the loaded projects list inside the sidebar split.
-func (w *window) sidebarProjectsPanel(c *ui.Context, pal *palette, h float32, grow bool) {
+func (w *window) sidebarProjectsPanel(c *ui.Context, pal *palette, h float32, grow bool, offset float32, opacity float32) {
 	col := ui.Column(c).Padding(2, 6, 4, 6)
 	if grow {
 		col.Grow(1).FillHeight()
 	} else {
 		col.Height(h).Shrink(0)
+	}
+	if offset != 0 {
+		col.Top(offset)
+	}
+	if opacity > 0 && opacity < 1.0 {
+		col.Opacity(opacity)
 	}
 	col.Children(func() {
 		w.projectListContent(c, pal, false)
@@ -340,7 +373,7 @@ func (w *window) sidebarProjectsPanel(c *ui.Context, pal *palette, h float32, gr
 }
 
 // sidebarTabPanel renders the search input and current tab content (files, history, pulls).
-func (w *window) sidebarTabPanel(c *ui.Context, pal *palette, h float32, grow bool) {
+func (w *window) sidebarTabPanel(c *ui.Context, pal *palette, h float32, grow bool, offset float32, opacity float32) {
 	if w.tab == 2 && !w.gh.ok() {
 		w.tab = 0
 	}
@@ -349,6 +382,12 @@ func (w *window) sidebarTabPanel(c *ui.Context, pal *palette, h float32, grow bo
 		col.Grow(1).FillHeight()
 	} else {
 		col.Height(h).Shrink(0)
+	}
+	if offset != 0 {
+		col.Top(offset)
+	}
+	if opacity > 0 && opacity < 1.0 {
+		col.Opacity(opacity)
 	}
 	col.Children(func() {
 		ui.Column(c).Padding(2, 10, 8).Shrink(0).Children(func() {
@@ -379,12 +418,9 @@ func (w *window) sidebarTabPanel(c *ui.Context, pal *palette, h float32, grow bo
 // sidebarProjectsResizer renders a horizontal splitter with a centered round swap button.
 func (w *window) sidebarProjectsResizer(c *ui.Context, pal *palette) {
 	t := c.Theme()
-	ui.Box(c).Height(18).FillWidth().AlignItems(ui.Center).Justify(ui.Center).Shrink(0).Children(func() {
-		// Underlying 1px divider line
-		ui.Box(c).Absolute().Left(0).Right(0).Height(1).Background(pal.cardBorder)
+	row := ui.Row(c).Height(22).FillWidth().AlignItems(ui.Center).Shrink(0)
 
-		// Drag handle overlay
-		handle := ui.Box(c).Absolute().Top(0).Bottom(0).Left(0).Right(0).Cursor(ui.CursorResizeNS)
+	dragHandler := func(handle ui.Element) {
 		if _, dy, held := handle.Dragged(); held {
 			if w.sidebarProjectsOnTop {
 				w.dragSidebarProjectsHeight += dy
@@ -398,20 +434,37 @@ func (w *window) sidebarProjectsResizer(c *ui.Context, pal *palette) {
 				go state.setSidebarProjects(w.sidebarProjectsShown, w.sidebarProjectsHeight, w.sidebarProjectsOnTop)
 			}
 		}
+	}
 
-		// Centered small round swap button
+	row.Children(func() {
+		// Left horizontal line and drag handle
+		leftHandle := ui.Row(c).Grow(1).Height(22).AlignItems(ui.Center).Cursor(ui.CursorResizeNS)
+		dragHandler(leftHandle)
+		leftHandle.Children(func() {
+			ui.Box(c).Height(1).FillWidth().Background(pal.cardBorder)
+		})
+
+		// Centered small round swap button directly on the divider line
 		btn := ui.ButtonBase(c).Size(22, 22).Radius(11).Center().Cursor(ui.CursorPointer).
 			Background(pal.headerBg).Border(1, pal.cardBorder).
-			Shadow(0, 1, 3, 0, ui.RGBA(0, 0, 0, 0.12)).Tooltip("Swap sections")
+			Shadow(0, 1, 3, 0, ui.RGBA(0, 0, 0, 0.12)).Label("Swap sections").Tooltip("Swap sections").Shrink(0)
 		if btn.Hovered() {
 			btn.Background(ui.RGBA(127, 127, 127, 0.15))
 		}
 		if btn.Clicked() {
+			w.swapAnimStart = time.Now()
 			w.sidebarProjectsOnTop = !w.sidebarProjectsOnTop
 			go state.setSidebarProjects(w.sidebarProjectsShown, w.sidebarProjectsHeight, w.sidebarProjectsOnTop)
 		}
 		btn.Children(func() {
 			ui.Icon(c, iconSwapVertical).FontSize(11).TextColor(t.TextMuted)
+		})
+
+		// Right horizontal line and drag handle
+		rightHandle := ui.Row(c).Grow(1).Height(22).AlignItems(ui.Center).Cursor(ui.CursorResizeNS)
+		dragHandler(rightHandle)
+		rightHandle.Children(func() {
+			ui.Box(c).Height(1).FillWidth().Background(pal.cardBorder)
 		})
 	})
 }
@@ -483,9 +536,25 @@ func (w *window) projectBar(c *ui.Context, pal *palette) {
 func (w *window) projectListContent(c *ui.Context, pal *palette, inPopover bool) {
 	t := c.Theme()
 	// Header
-	ui.Row(c).Height(24).Padding(2, 6).Justify(ui.SpaceBetween).Children(func() {
-		ui.Text(c, "LOADED PROJECTS").FontSize(10).FontWeight(700).TextColor(t.TextMuted)
-		ui.Textf(c, "%d open", len(w.projects)).FontSize(10).TextColor(t.TextMuted)
+	ui.Row(c).Height(24).Padding(2, 6).Justify(ui.SpaceBetween).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "PROJECTS").FontSize(10).FontWeight(700).TextColor(t.TextMuted)
+		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+			ui.Textf(c, "%d open", len(w.projects)).FontSize(10).TextColor(t.TextMuted)
+			addBtn := ui.ButtonBase(c).Size(20, 20).Radius(4).Center().Label("Open Folder").
+				Tooltip("Open Folder…").Cursor(ui.CursorPointer)
+			if addBtn.Hovered() {
+				addBtn.Background(ui.RGBA(127, 127, 127, 0.15))
+			}
+			if addBtn.Clicked() {
+				if inPopover {
+					w.projectPopoverOpen = false
+				}
+				openFolder()
+			}
+			addBtn.Children(func() {
+				ui.Icon(c, iconPlus).FontSize(12).TextColor(t.TextMuted)
+			})
+		})
 	})
 
 	renderItems := func() {
@@ -639,24 +708,24 @@ func (w *window) projectListContent(c *ui.Context, pal *palette, inPopover bool)
 		})
 	}
 
-	// Divider
-	ui.Box(c).Height(1).Margin(4, 2).Background(pal.cardBorder).Shrink(0)
+	if inPopover {
+		// Divider
+		ui.Box(c).Height(1).Margin(4, 2).Background(pal.cardBorder).Shrink(0)
 
-	// "Open Folder..." action button
-	openBtn := ui.Row(c).Height(28).Padding(0, 8).Gap(6).Radius(6).Cursor(ui.CursorPointer).MinWidth(0).Shrink(0)
-	if openBtn.Hovered() {
-		openBtn.Background(ui.RGBA(127, 127, 127, 0.1))
-	}
-	if openBtn.Clicked() {
-		if inPopover {
-			w.projectPopoverOpen = false
+		// "Open Folder..." action button
+		openBtn := ui.Row(c).Height(28).Padding(0, 8).Gap(6).Radius(6).Cursor(ui.CursorPointer).MinWidth(0).Shrink(0)
+		if openBtn.Hovered() {
+			openBtn.Background(ui.RGBA(127, 127, 127, 0.1))
 		}
-		openFolder()
+		if openBtn.Clicked() {
+			w.projectPopoverOpen = false
+			openFolder()
+		}
+		openBtn.Children(func() {
+			ui.Icon(c, iconPlus).FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "Open Folder…").FontSize(12).TextColor(t.Text)
+		})
 	}
-	openBtn.Children(func() {
-		ui.Icon(c, iconPlus).FontSize(12).TextColor(t.TextMuted)
-		ui.Text(c, "Open Folder…").FontSize(12).TextColor(t.Text)
-	})
 }
 
 // sidebarBg is the sidebar's background: none on macOS, where the

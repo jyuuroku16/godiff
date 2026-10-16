@@ -156,8 +156,8 @@ func TestProjectBarAndPopoverUI(t *testing.T) {
 	w.projectPopoverOpen = true
 	tt.Frame()
 
-	if !tt.HasText("LOADED PROJECTS") {
-		t.Fatalf("expected LOADED PROJECTS in popover, texts: %v", tt.Texts())
+	if !tt.HasText("PROJECTS") {
+		t.Fatalf("expected PROJECTS in popover, texts: %v", tt.Texts())
 	}
 	if !tt.HasText(name2) {
 		t.Fatalf("expected secondary project name %q in popover", name2)
@@ -359,9 +359,15 @@ func TestSidebarProjectsSplitAndSwap(t *testing.T) {
 
 	tt.Frame()
 
-	// 2. In split mode, LOADED PROJECTS is embedded directly in sidebar
-	if !tt.HasText("LOADED PROJECTS") {
-		t.Fatalf("expected 'LOADED PROJECTS' in sidebar split, texts: %v", tt.Texts())
+	// 2. In split mode, PROJECTS header is shown, bottom "Open Folder…" row is hidden
+	if !tt.HasText("PROJECTS") {
+		t.Fatalf("expected 'PROJECTS' in sidebar split, texts: %v", tt.Texts())
+	}
+	if tt.HasText("LOADED PROJECTS") {
+		t.Fatal("unexpected 'LOADED PROJECTS' found")
+	}
+	if tt.HasText("Open Folder…") {
+		t.Fatal("expected bottom 'Open Folder…' row to be hidden in split mode")
 	}
 
 	// 3. Toggle off: switch to popover mode
@@ -377,15 +383,24 @@ func TestSidebarProjectsSplitAndSwap(t *testing.T) {
 	// 4. Toggle back on
 	w.sidebarProjectsShown = true
 	tt.Frame()
-	if !tt.HasText("LOADED PROJECTS") {
-		t.Fatal("expected 'LOADED PROJECTS' restored in split mode")
+	if !tt.HasText("PROJECTS") {
+		t.Fatal("expected 'PROJECTS' restored in split mode")
 	}
 
-	// 5. Test Swap (onTop toggle)
-	w.sidebarProjectsOnTop = false
-	tt.Frame()
+	// 5. Test Swap button click and transition animation
+	if err := tt.Click("Swap sections"); err != nil {
+		t.Fatalf("failed to click swap button: %v", err)
+	}
 	if w.sidebarProjectsOnTop {
-		t.Fatal("expected sidebarProjectsOnTop to be false after swap")
+		t.Fatal("expected sidebarProjectsOnTop to be false after swap click")
+	}
+	if w.swapAnimStart.IsZero() {
+		t.Fatal("expected swapAnimStart to be set for transition animation")
+	}
+
+	// Run animation frames
+	for frame := 0; frame < 5; frame++ {
+		tt.Frame()
 	}
 
 	// 6. Test Persistence

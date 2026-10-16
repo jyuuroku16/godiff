@@ -144,6 +144,7 @@ type window struct {
 	sidebarProjectsHeight     float32
 	dragSidebarProjectsHeight float32
 	sidebarProjectsOnTop      bool
+	swapAnimStart             time.Time
 
 	// The diff surface.
 	rows       []row
