@@ -353,9 +353,25 @@ func (w *window) sidebarProjectsSwitch(c *ui.Context, pal *palette) {
 	})
 }
 
+// sidebarFadeColor returns the background color used for sidebar gradual blur / fade masks.
+func (w *window) sidebarFadeColor(t *ui.Theme) ui.Color {
+	if runtime.GOOS == "darwin" {
+		if t.Dark {
+			return ui.Hex("#1c1c1e")
+		}
+		return ui.Hex("#f0f0f3")
+	}
+	return w.sidebarBg(t)
+}
+
 // sidebarProjectsPanel renders the loaded projects list inside the sidebar split.
 func (w *window) sidebarProjectsPanel(c *ui.Context, pal *palette, h float32, grow bool, offset float32, opacity float32) {
-	col := ui.Column(c).Padding(2, 6, 4, 6)
+	// Remove stiff padding near divider: 0 on the side facing the splitter
+	topPad, bottomPad := float32(2), float32(0)
+	if !w.sidebarProjectsOnTop {
+		topPad, bottomPad = 0, 4
+	}
+	col := ui.Column(c).Padding(topPad, 6, bottomPad, 6)
 	if grow {
 		col.Grow(1).FillHeight()
 	} else {
@@ -389,8 +405,13 @@ func (w *window) sidebarTabPanel(c *ui.Context, pal *palette, h float32, grow bo
 	if opacity > 0 && opacity < 1.0 {
 		col.Opacity(opacity)
 	}
+	t := c.Theme()
+	topPad := float32(2)
+	if w.sidebarProjectsShown && w.sidebarProjectsOnTop {
+		topPad = 6 // comfortable breathing room below divider line
+	}
 	col.Children(func() {
-		ui.Column(c).Padding(2, 10, 8).Shrink(0).Children(func() {
+		ui.Column(c).Padding(topPad, 10, 8).Shrink(0).Children(func() {
 			switch w.tab {
 			case 0:
 				if searchInput(c, &w.filter, "Filter files", &w.filterFocus, &w.typing) {
@@ -404,13 +425,36 @@ func (w *window) sidebarTabPanel(c *ui.Context, pal *palette, h float32, grow bo
 				searchInput(c, &w.pullsFilter, "Filter pull requests", &w.filterFocus, &w.typing)
 			}
 		})
-		switch w.tab {
-		case 0:
-			w.fileTree(c)
-		case 1:
-			w.historyView(c)
-		default:
-			w.pullsView(c)
+		if w.sidebarProjectsShown && !w.sidebarProjectsOnTop {
+			// Tab panel is on top, add bottom gradual blur / fade overlay toward divider
+			ui.Box(c).Grow(1).FillWidth().Children(func() {
+				ui.Box(c).FillWidth().FillHeight().Children(func() {
+					switch w.tab {
+					case 0:
+						w.fileTree(c)
+					case 1:
+						w.historyView(c)
+					default:
+						w.pullsView(c)
+					}
+				})
+				fadeColor := w.sidebarFadeColor(t)
+				ui.Box(c).Absolute().Bottom(0).Left(0).Right(0).Height(24).
+					LinearGradient(ui.LinearGradient{
+						From:  fadeColor.Alpha(0),
+						To:    fadeColor.Alpha(0.95),
+						Angle: 180,
+					}).PassThrough()
+			})
+		} else {
+			switch w.tab {
+			case 0:
+				w.fileTree(c)
+			case 1:
+				w.historyView(c)
+			default:
+				w.pullsView(c)
+			}
 		}
 	})
 }
@@ -418,7 +462,7 @@ func (w *window) sidebarTabPanel(c *ui.Context, pal *palette, h float32, grow bo
 // sidebarProjectsResizer renders a horizontal splitter with a centered round swap button.
 func (w *window) sidebarProjectsResizer(c *ui.Context, pal *palette) {
 	t := c.Theme()
-	row := ui.Row(c).Height(22).FillWidth().AlignItems(ui.Center).Shrink(0)
+	row := ui.Row(c).Height(16).FillWidth().AlignItems(ui.Center).Shrink(0)
 
 	dragHandler := func(handle ui.Element) {
 		if _, dy, held := handle.Dragged(); held {
@@ -438,14 +482,14 @@ func (w *window) sidebarProjectsResizer(c *ui.Context, pal *palette) {
 
 	row.Children(func() {
 		// Left horizontal line and drag handle
-		leftHandle := ui.Row(c).Grow(1).Height(22).AlignItems(ui.Center).Cursor(ui.CursorResizeNS)
+		leftHandle := ui.Row(c).Grow(1).Height(16).AlignItems(ui.Center).Cursor(ui.CursorResizeNS)
 		dragHandler(leftHandle)
 		leftHandle.Children(func() {
-			ui.Box(c).Height(1).FillWidth().Background(pal.cardBorder)
+			ui.Box(c).Height(1).FillWidth().Background(pal.cardBorder.Alpha(0.75))
 		})
 
 		// Centered small round swap button directly on the divider line
-		btn := ui.ButtonBase(c).Size(22, 22).Radius(11).Center().Cursor(ui.CursorPointer).
+		btn := ui.ButtonBase(c).Size(20, 20).Radius(10).Center().Cursor(ui.CursorPointer).
 			Background(pal.headerBg).Border(1, pal.cardBorder).
 			Shadow(0, 1, 3, 0, ui.RGBA(0, 0, 0, 0.12)).Label("Swap sections").Tooltip("Swap sections").Shrink(0)
 		if btn.Hovered() {
@@ -461,10 +505,10 @@ func (w *window) sidebarProjectsResizer(c *ui.Context, pal *palette) {
 		})
 
 		// Right horizontal line and drag handle
-		rightHandle := ui.Row(c).Grow(1).Height(22).AlignItems(ui.Center).Cursor(ui.CursorResizeNS)
+		rightHandle := ui.Row(c).Grow(1).Height(16).AlignItems(ui.Center).Cursor(ui.CursorResizeNS)
 		dragHandler(rightHandle)
 		rightHandle.Children(func() {
-			ui.Box(c).Height(1).FillWidth().Background(pal.cardBorder)
+			ui.Box(c).Height(1).FillWidth().Background(pal.cardBorder.Alpha(0.75))
 		})
 	})
 }
@@ -537,9 +581,8 @@ func (w *window) projectListContent(c *ui.Context, pal *palette, inPopover bool)
 	t := c.Theme()
 	// Header
 	ui.Row(c).Height(24).Padding(2, 6).Justify(ui.SpaceBetween).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "PROJECTS").FontSize(10).FontWeight(700).TextColor(t.TextMuted)
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-			ui.Textf(c, "%d open", len(w.projects)).FontSize(10).TextColor(t.TextMuted)
+			ui.Text(c, "PROJECTS").FontSize(10).FontWeight(700).TextColor(t.TextMuted)
 			addBtn := ui.ButtonBase(c).Size(20, 20).Radius(4).Center().Label("Open Folder").
 				Tooltip("Open Folder…").Cursor(ui.CursorPointer)
 			if addBtn.Hovered() {
@@ -555,6 +598,7 @@ func (w *window) projectListContent(c *ui.Context, pal *palette, inPopover bool)
 				ui.Icon(c, iconPlus).FontSize(12).TextColor(t.TextMuted)
 			})
 		})
+		ui.Textf(c, "%d open", len(w.projects)).FontSize(10).TextColor(t.TextMuted)
 	})
 
 	renderItems := func() {
@@ -703,8 +747,28 @@ func (w *window) projectListContent(c *ui.Context, pal *palette, inPopover bool)
 	if inPopover {
 		renderItems()
 	} else {
-		ui.Scroll(c).Grow(1).Children(func() {
-			renderItems()
+		ui.Box(c).Grow(1).FillWidth().Children(func() {
+			ui.Scroll(c).FillWidth().FillHeight().Children(func() {
+				renderItems()
+			})
+			fadeColor := w.sidebarFadeColor(t)
+			if w.sidebarProjectsOnTop {
+				// Bottom gradual blur / fade overlay toward divider
+				ui.Box(c).Absolute().Bottom(0).Left(0).Right(0).Height(24).
+					LinearGradient(ui.LinearGradient{
+						From:  fadeColor.Alpha(0),
+						To:    fadeColor.Alpha(0.95),
+						Angle: 180,
+					}).PassThrough()
+			} else {
+				// Top gradual blur / fade overlay toward divider
+				ui.Box(c).Absolute().Top(0).Left(0).Right(0).Height(24).
+					LinearGradient(ui.LinearGradient{
+						From:  fadeColor.Alpha(0.95),
+						To:    fadeColor.Alpha(0),
+						Angle: 180,
+					}).PassThrough()
+			}
 		})
 	}
 

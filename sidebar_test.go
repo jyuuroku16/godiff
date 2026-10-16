@@ -359,9 +359,12 @@ func TestSidebarProjectsSplitAndSwap(t *testing.T) {
 
 	tt.Frame()
 
-	// 2. In split mode, PROJECTS header is shown, bottom "Open Folder…" row is hidden
+	// 2. In split mode, PROJECTS header is shown, bottom "Open Folder…" row is hidden, + button is present
 	if !tt.HasText("PROJECTS") {
 		t.Fatalf("expected 'PROJECTS' in sidebar split, texts: %v", tt.Texts())
+	}
+	if _, ok := tt.Find("Open Folder"); !ok {
+		t.Fatal("expected Open Folder (+) button next to PROJECTS header")
 	}
 	if tt.HasText("LOADED PROJECTS") {
 		t.Fatal("unexpected 'LOADED PROJECTS' found")
