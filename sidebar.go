@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -269,6 +270,7 @@ func (w *window) sidebar(c *ui.Context) {
 				ui.Spacer(c)
 			}
 		})
+		w.projectBar(c, pal)
 		if w.tab == 2 && !w.gh.ok() {
 			w.tab = 0
 		}
@@ -296,6 +298,229 @@ func (w *window) sidebar(c *ui.Context) {
 		}
 		w.sidebarFooter(c, pal)
 	})
+}
+
+// projectBar renders the loaded project selector in the sidebar top,
+// and opens a popover on click to list and switch projects.
+func (w *window) projectBar(c *ui.Context, pal *palette) {
+	if w.repo == nil {
+		return
+	}
+	t := c.Theme()
+	projectName := filepath.Base(w.repo.Root)
+
+	if w.projectDragCooldown > 0 {
+		w.projectDragCooldown--
+	}
+
+	// Outer bar anchor
+	bar := ui.Row(c).Height(30).Padding(0, 8).Margin(0, 10, 4, 10).Gap(6).Radius(7).
+		Cursor(ui.CursorPointer).MinWidth(0)
+
+	if bar.Hovered() || w.projectPopoverOpen {
+		bar.Background(ui.RGBA(127, 127, 127, 0.12))
+	}
+
+	if bar.Clicked() && w.projectDragCooldown == 0 && !w.projectDragging && w.projectDragID == "" {
+		w.projectPopoverOpen = !w.projectPopoverOpen
+	}
+
+	bar.Children(func() {
+		ui.Icon(c, iconFolder).FontSize(13).TextColor(t.TextMuted)
+		nameText := ui.Text(c, projectName).FontSize(13).FontWeight(600).SingleLine().Shrink(1).MinWidth(0)
+		if w.projectPopoverOpen {
+			nameText.TextColor(t.Accent)
+		}
+
+		if len(w.projects) > 1 {
+			// A compact badge showing the count of loaded projects
+			ui.Textf(c, "%d", len(w.projects)).FontSize(10).FontWeight(600).
+				Padding(1, 5).Radius(4).Background(pal.pill).TextColor(t.TextMuted).Shrink(0)
+		}
+
+		ui.Spacer(c)
+		chevron := ui.Icon(c, iconChevronDown).FontSize(11).TextColor(t.TextMuted).Shrink(0)
+		if w.projectPopoverOpen {
+			chevron.TextColor(t.Accent)
+		}
+	})
+
+	// Popover showing all loaded projects
+	ui.PopoverBase(c, bar, &w.projectPopoverOpen, func(panel ui.Element) {
+		panel.Width(max(w.sidebarWidth-20, 260)).Margin(4, 0, 0, 0).Padding(6).Radius(10).
+			Background(pal.headerBg).Border(1, pal.cardBorder).
+			Shadow(0, 10, 30, 0, ui.RGBA(0, 0, 0, 0.22)).Label("Loaded Projects")
+
+		panel.Children(func() {
+			// Header
+			ui.Row(c).Height(24).Padding(2, 6).Justify(ui.SpaceBetween).Children(func() {
+				ui.Text(c, "LOADED PROJECTS").FontSize(10).FontWeight(700).TextColor(t.TextMuted)
+				ui.Textf(c, "%d open", len(w.projects)).FontSize(10).TextColor(t.TextMuted)
+			})
+
+			// Project items list
+			ui.Column(c).Gap(2).Children(func() {
+				projects := slices.Clone(w.projects)
+				swapped := false
+				for _, proj := range projects {
+					p := proj
+					isActive := w.repo != nil && samePath(w.repo.Root, p)
+					valid := isProjectValid(p)
+					name := filepath.Base(p)
+					dispPath := abbreviateHome(p)
+
+					isDraggingThis := w.projectDragID == p && w.projectDragging
+
+					row := ui.Row(c.Key("proj:" + p)).MinHeight(36).Padding(5, 8).Gap(8).Radius(6).MinWidth(0)
+					if isDraggingThis {
+						row.Top(w.projectDragDY).Shadow(0, 8, 20, 0, ui.RGBA(0, 0, 0, 0.35)).
+							Background(pal.headerBg).Border(1, t.Accent.Alpha(0.6)).Cursor(ui.CursorGrabbing)
+					} else if valid {
+						row.Cursor(ui.CursorGrab)
+					}
+					if isActive && !isDraggingThis {
+						row.Background(t.Accent.Alpha(0.12))
+					} else if row.Hovered() && !isDraggingThis {
+						row.Background(ui.RGBA(127, 127, 127, 0.08))
+					}
+					if !valid {
+						row.Opacity(0.55)
+					}
+
+					justDropped := false
+					// Drag reordering handling
+					if _, dy, held := row.Dragged(); held {
+						if w.projectDragID == "" {
+							w.projectDragID = p
+							w.projectDragDY = 0
+							w.projectDragging = false
+						}
+						if w.projectDragID == p {
+							w.projectDragDY += dy
+							if !w.projectDragging && (w.projectDragDY > 3 || w.projectDragDY < -3) {
+								w.projectDragging = true
+							}
+							if w.projectDragging {
+								w.projectDragCooldown = 2
+								if !swapped {
+									cur := slices.Index(w.projects, p)
+									const itemStep = float32(38)
+									if cur >= 0 {
+										if w.projectDragDY > itemStep*0.55 && cur+1 < len(w.projects) {
+											w.reorderProject(cur, cur+1)
+											w.projectDragDY -= itemStep
+											swapped = true
+										} else if w.projectDragDY < -itemStep*0.55 && cur > 0 {
+											w.reorderProject(cur, cur-1)
+											w.projectDragDY += itemStep
+											swapped = true
+										}
+									}
+								}
+							}
+						}
+					} else if w.projectDragID == p {
+						if w.projectDragging {
+							justDropped = true
+							w.projectDragCooldown = 2
+							go state.setProjects(w.projects)
+						}
+						w.projectDragID = ""
+						w.projectDragDY = 0
+						w.projectDragging = false
+					}
+
+					// Only allow switching to valid projects when cleanly clicked (not dragging, not dropped, not in cooldown)
+					if row.Clicked() && valid && !w.projectDragging && w.projectDragID == "" && !justDropped && w.projectDragCooldown == 0 {
+						w.projectPopoverOpen = false
+						_ = w.switchProject(p)
+					}
+
+					row.Children(func() {
+						// Folder or Alert Icon
+						icon := iconFolder
+						if !valid {
+							icon = iconAlert
+						} else if isActive {
+							icon = iconFolderOpen
+						}
+						ic := ui.Icon(c, icon).FontSize(15).Shrink(0)
+						switch {
+						case !valid:
+							ic.TextColor(t.Danger)
+						case isActive:
+							ic.TextColor(t.Accent)
+						default:
+							ic.TextColor(t.TextMuted)
+						}
+
+						// Project Name & Path
+						ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(1).Children(func() {
+							ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
+								n := ui.Text(c, name).FontSize(12).FontWeight(600).SingleLine().Shrink(1).MinWidth(0)
+								if isActive && valid {
+									n.TextColor(t.Accent)
+								} else if !valid {
+									n.TextColor(t.TextMuted)
+								}
+								if !valid {
+									ui.Text(c, "已失效").FontSize(9).FontWeight(600).Padding(1, 4).
+										Radius(3).Background(t.Danger.Alpha(0.15)).TextColor(t.Danger).Shrink(0)
+								}
+							})
+							ui.Text(c, dispPath).FontSize(10).TextColor(t.TextMuted).SingleLine()
+						})
+
+						// Active Indicator
+						if isActive && valid {
+							ui.Icon(c, iconCheck).FontSize(13).TextColor(t.Accent).Shrink(0)
+						}
+
+						// Allow removing from the list (always for invalid, or when count > 1)
+						if len(w.projects) > 1 || !valid {
+							rmTip := "Remove from list"
+							if !valid {
+								rmTip = "Remove invalid project"
+							}
+							rm := ui.ButtonBase(c).Size(18, 18).Radius(4).Center().Label("Remove project from list").
+								Tooltip(rmTip).KeepFocus().Cursor(ui.CursorPointer)
+							if rm.Hovered() {
+								rm.Background(ui.RGBA(127, 127, 127, 0.2))
+							}
+							rm.Children(func() {
+								ui.Icon(c, iconClose).FontSize(10).TextColor(t.TextMuted)
+							})
+							if rm.Clicked() {
+								w.removeProject(p)
+							}
+						}
+					})
+				}
+			})
+
+			// Divider
+			ui.Box(c).Height(1).Margin(4, 2).Background(pal.cardBorder)
+
+			// "Open Folder..." action button
+			openBtn := ui.Row(c).Height(28).Padding(0, 8).Gap(6).Radius(6).Cursor(ui.CursorPointer).MinWidth(0)
+			if openBtn.Hovered() {
+				openBtn.Background(ui.RGBA(127, 127, 127, 0.1))
+			}
+			if openBtn.Clicked() {
+				w.projectPopoverOpen = false
+				openFolder()
+			}
+			openBtn.Children(func() {
+				ui.Icon(c, iconPlus).FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, "Open Folder…").FontSize(12).TextColor(t.Text)
+			})
+		})
+	})
+
+	// Keep popover open if user was dragging or just finished dragging (do not dismiss)
+	if w.projectDragCooldown > 0 || w.projectDragging || w.projectDragID != "" {
+		w.projectPopoverOpen = true
+	}
 }
 
 // sidebarBg is the sidebar's background: none on macOS, where the

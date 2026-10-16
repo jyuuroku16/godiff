@@ -286,6 +286,8 @@ type storeData struct {
 	// Recent lists them, and the app opens the first when started without
 	// one, from the Dock.
 	Recent []string `json:"recent"`
+	// Projects are the loaded projects displayed in the window.
+	Projects []string `json:"projects,omitempty"`
 	// LastRepository is the repository opened last, as kept before Recent.
 	LastRepository string `json:"lastRepository,omitempty"`
 }
@@ -388,6 +390,21 @@ func (s *store) addRecent(root string) bool {
 func (s *store) clearRecent() {
 	s.mu.Lock()
 	s.data.Recent = nil
+	s.mu.Unlock()
+	s.save()
+}
+
+// projects returns the list of projects loaded.
+func (s *store) projects() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.data.Projects)
+}
+
+// setProjects sets and persists the list of projects loaded.
+func (s *store) setProjects(projects []string) {
+	s.mu.Lock()
+	s.data.Projects = slices.Clone(projects)
 	s.mu.Unlock()
 	s.save()
 }

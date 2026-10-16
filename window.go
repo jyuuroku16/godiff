@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -49,6 +50,22 @@ type session struct {
 	viewed   map[string]string
 }
 
+// projectState is the state of a project kept while the window shows
+// another.
+type projectState struct {
+	repo      *git.Repo
+	source    source
+	branch    string
+	viewed    map[string]string
+	comments  []*comment
+	tab       int
+	filter    string
+	sessions  map[source]*session
+	analyses  map[source]*analysisState
+	groups    []fileGroup
+	groupPref groupMode
+}
+
 // window is a window reviewing a repository.
 type window struct {
 	win      *mygo.Window
@@ -56,6 +73,15 @@ type window struct {
 	launch   source // what the window was opened on
 	source   source
 	settings Settings
+
+	// Projects loaded in this window.
+	projects           []string
+	projectStates      map[string]*projectState
+	projectPopoverOpen bool
+	projectDragID       string
+	projectDragDY       float32
+	projectDragging     bool
+	projectDragCooldown int
 
 	branch     string
 	files      []*fileState
@@ -283,24 +309,39 @@ func openWindow(dir string, src source) error {
 // repository.
 func newWindow(repo *git.Repo, src source) *window {
 	width, shown := state.layout()
+	projects := state.projects()
+	hasRoot := false
+	for _, p := range projects {
+		if samePath(p, repo.Root) {
+			hasRoot = true
+			break
+		}
+	}
+	if !hasRoot {
+		projects = append([]string{repo.Root}, projects...)
+		go state.setProjects(projects)
+	}
+
 	w := &window{
-		repo:         repo,
-		launch:       src,
-		source:       src,
-		settings:     cfg.Get(),
-		sidebarShown: shown,
-		sidebarWidth: width,
-		historyLimit: historyPage,
-		viewed:       state.viewed(viewedKey(repo.Root, src)),
-		hscroll:      map[string]float32{},
-		closedDirs:   map[string]bool{},
-		commitTimes:  map[string]commitTime{},
-		reloaded:     map[string]bool{},
-		fileMatches:  map[int]bool{},
-		selFile:      -1,
-		selHunk:      -1,
-		prs:          map[source]*pullState{},
-		analyses:     map[source]*analysisState{},
+		repo:          repo,
+		launch:        src,
+		source:        src,
+		settings:      cfg.Get(),
+		sidebarShown:  shown,
+		sidebarWidth:  width,
+		projects:      projects,
+		projectStates: map[string]*projectState{},
+		historyLimit:  historyPage,
+		viewed:        state.viewed(viewedKey(repo.Root, src)),
+		hscroll:       map[string]float32{},
+		closedDirs:    map[string]bool{},
+		commitTimes:   map[string]commitTime{},
+		reloaded:      map[string]bool{},
+		fileMatches:   map[int]bool{},
+		selFile:       -1,
+		selHunk:       -1,
+		prs:           map[source]*pullState{},
+		analyses:      map[source]*analysisState{},
 	}
 	w.gh, _ = findGitHubRemote(repo, github.Repo{})
 	if src.kind == sourcePull {
@@ -311,6 +352,272 @@ func newWindow(repo *git.Repo, src source) *window {
 	w.list.Key = func(i int) any { return w.key(&w.rows[i]) }
 	w.list.Header = func(i int) bool { return w.rows[i].kind == rowHeader }
 	return w
+}
+
+// canonicalPath resolves symlinks even if the leaf file/directory has been deleted.
+func canonicalPath(p string) string {
+	clean := filepath.Clean(p)
+	if r, err := filepath.EvalSymlinks(clean); err == nil {
+		return r
+	}
+	dir, base := filepath.Dir(clean), filepath.Base(clean)
+	if dir != clean && dir != "." && dir != "/" {
+		return filepath.Join(canonicalPath(dir), base)
+	}
+	return clean
+}
+
+// samePath reports whether two paths refer to the same directory,
+// accounting for symlinks such as macOS's /var -> /private/var.
+func samePath(a, b string) bool {
+	ca, cb := filepath.Clean(a), filepath.Clean(b)
+	if ca == cb {
+		return true
+	}
+	return canonicalPath(ca) == canonicalPath(cb)
+}
+
+// isProjectValid reports whether dir exists on disk and is a valid git repository.
+// It performs fast stat checks on .git/HEAD without spawning any external git processes.
+func isProjectValid(dir string) bool {
+	fi, err := os.Stat(dir)
+	if err != nil || !fi.IsDir() {
+		return false
+	}
+	// Fast check for .git directory or submodule gitlink file
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		return true
+	}
+	// Bare repo fallback (HEAD + objects)
+	if _, err := os.Stat(filepath.Join(dir, "HEAD")); err == nil {
+		if _, err := os.Stat(filepath.Join(dir, "objects")); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// ensureProject adds root to projects if not already present and saves.
+func (w *window) ensureProject(root string) {
+	for _, p := range w.projects {
+		if samePath(p, root) {
+			return
+		}
+	}
+	w.projects = append(w.projects, root)
+	go state.setProjects(w.projects)
+}
+
+// addProject adds root to the window's project list and optionally switches to it.
+func (w *window) addProject(root string, andSwitch bool) error {
+	nextRepo, err := git.Open(root)
+	if err != nil {
+		return err
+	}
+	canonical := nextRepo.Root
+	w.ensureProject(canonical)
+	if andSwitch {
+		return w.switchProject(canonical)
+	}
+	return nil
+}
+
+// addProjects adds multiple roots to the project list, ensures persistence, and switches to the last valid project.
+func (w *window) addProjects(roots []string) error {
+	var validRoots []string
+	for _, r := range roots {
+		nextRepo, err := git.Open(r)
+		if err != nil {
+			continue
+		}
+		canonical := nextRepo.Root
+		w.ensureProject(canonical)
+		validRoots = append(validRoots, canonical)
+	}
+	if len(validRoots) == 0 {
+		return errors.New("no valid Git repositories found in selection")
+	}
+	return w.switchProject(validRoots[len(validRoots)-1])
+}
+
+// removeProject removes a project from the window.
+func (w *window) removeProject(root string) {
+	var nextProjects []string
+	for _, p := range w.projects {
+		if !samePath(p, root) {
+			nextProjects = append(nextProjects, p)
+		}
+	}
+	if len(nextProjects) == 0 {
+		return
+	}
+	w.projects = nextProjects
+	go state.setProjects(w.projects)
+	for k := range w.projectStates {
+		if samePath(k, root) {
+			delete(w.projectStates, k)
+		}
+	}
+
+	// If the current project is removed, switch to another valid one if possible.
+	if w.repo != nil && samePath(w.repo.Root, root) {
+		var target string
+		for _, p := range nextProjects {
+			if isProjectValid(p) {
+				target = p
+				break
+			}
+		}
+		if target == "" {
+			target = nextProjects[0]
+		}
+		_ = w.switchProject(target)
+	} else {
+		w.invalidate()
+	}
+}
+
+// reorderProject moves the project at from index to to index and saves.
+func (w *window) reorderProject(from, to int) {
+	if from < 0 || from >= len(w.projects) || to < 0 || to >= len(w.projects) || from == to {
+		return
+	}
+	p := w.projects[from]
+	w.projects = slices.Delete(w.projects, from, from+1)
+	w.projects = slices.Insert(w.projects, to, p)
+	go state.setProjects(w.projects)
+	w.invalidate()
+}
+
+// switchProject switches the window to review another repository directory.
+func (w *window) switchProject(root string) error {
+	// Guard against deleted / invalid projects.
+	if !isProjectValid(root) {
+		w.projectPopoverOpen = false
+		return errors.New("project directory no longer exists or is not a git repository")
+	}
+
+	// 1. Resolve repository
+	var nextRepo *git.Repo
+	for _, s := range w.projectStates {
+		if s.repo != nil && samePath(s.repo.Root, root) {
+			nextRepo = s.repo
+			break
+		}
+	}
+	if nextRepo == nil {
+		var err error
+		nextRepo, err = git.Open(root)
+		if err != nil {
+			return err
+		}
+	}
+	canonical := nextRepo.Root
+	if w.repo != nil && samePath(w.repo.Root, canonical) {
+		w.projectPopoverOpen = false
+		return nil
+	}
+
+	// 2. Save current project's state.
+	if w.repo != nil {
+		if w.projectStates == nil {
+			w.projectStates = map[string]*projectState{}
+		}
+		if w.sessions == nil {
+			w.sessions = map[source]*session{}
+		}
+		w.sessions[w.source] = &session{comments: w.comments, viewed: w.viewed}
+		w.projectStates[w.repo.Root] = &projectState{
+			repo:      w.repo,
+			source:    w.source,
+			branch:    w.branch,
+			viewed:    w.viewed,
+			comments:  w.comments,
+			tab:       w.tab,
+			filter:    w.filter,
+			sessions:  w.sessions,
+			analyses:  w.analyses,
+			groups:    w.groups,
+			groupPref: w.groupPref,
+		}
+	}
+
+	// 3. Ensure the project is in the list.
+	w.ensureProject(canonical)
+
+	// 4. Switch repository and reset diff states.
+	w.repo = nextRepo
+	w.signature = ""
+	w.changed = false
+	w.files = nil
+	w.rows = nil
+	w.commit = nil
+	w.loadErr = nil
+	w.loading = true
+	w.loadedOnce = false
+	w.rowsDirty = true
+	w.projectPopoverOpen = false
+	w.commitOpen = false
+
+	var saved *projectState
+	for k, s := range w.projectStates {
+		if samePath(k, canonical) {
+			saved = s
+			break
+		}
+	}
+
+	if saved != nil {
+		w.source = saved.source
+		w.branch = saved.branch
+		w.viewed = saved.viewed
+		w.comments = saved.comments
+		w.tab = saved.tab
+		w.filter = saved.filter
+		w.sessions = saved.sessions
+		w.analyses = saved.analyses
+		w.groups = saved.groups
+		w.groupPref = saved.groupPref
+	} else {
+		w.source = source{kind: sourceWorkingTree}
+		w.branch = ""
+		w.viewed = state.viewed(viewedKey(canonical, w.source))
+		w.comments = nil
+		w.tab = 0
+		w.filter = ""
+		w.sessions = map[source]*session{}
+		w.analyses = map[source]*analysisState{}
+		w.groups = nil
+		w.groupPref = groupNone
+	}
+
+	w.gh, _ = findGitHubRemote(w.repo, github.Repo{})
+	w.pullsLoaded = false
+	w.pulls = nil
+	w.pullsErr = nil
+	w.pr = nil
+	w.prs = map[source]*pullState{}
+	if w.source.kind == sourcePull {
+		w.pr = w.pullFor(w.source)
+	}
+
+	w.buildTree()
+	w.list = ui.ListState{Key: w.list.Key, Header: w.list.Header}
+	w.selFile, w.selHunk = -1, -1
+	w.finding, w.query = false, ""
+	w.hscroll = map[string]float32{}
+	w.current = 0
+
+	if w.win != nil {
+		w.win.SetTitle(windowTitle(canonical, w.source))
+	}
+	go noteRecent(canonical)
+
+	w.load()
+	w.loadHistory()
+	w.loadUser()
+	w.invalidate()
+	return nil
 }
 
 // windowTitle is "<repository>[/<source>] · Godiff".
@@ -976,17 +1283,21 @@ func (w *window) checkChanges() {
 	var src source
 	var sig string
 	var busy bool
-	mygo.RunOnMain(func() { src, sig, busy = w.source, w.signature, w.loading || w.changed })
-	if src.kind == sourcePull && !busy {
+	var repo *git.Repo
+	mygo.RunOnMain(func() {
+		src, sig, busy = w.source, w.signature, w.loading || w.changed
+		repo = w.repo
+	})
+	if repo == nil || busy || sig == "" || src.kind == sourceCommit {
+		return
+	}
+	if src.kind == sourcePull {
 		w.checkPull(src)
 		return
 	}
-	if busy || sig == "" || src.kind == sourceCommit {
-		return
-	}
-	if now := w.repo.StatusSignature(); now != sig {
+	if now := repo.StatusSignature(); now != sig {
 		w.win.Update(func() {
-			if w.source == src && !w.loading {
+			if w.repo == repo && w.source == src && !w.loading {
 				w.changed = true
 			}
 		})

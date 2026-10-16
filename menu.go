@@ -4,6 +4,7 @@ import (
 	"runtime"
 
 	"github.com/egoist/godiff/internal/agent"
+	"github.com/egoist/godiff/internal/git"
 	"github.com/egoist/mygo"
 )
 
@@ -177,18 +178,68 @@ func applyTheme(s Settings) {
 	}
 }
 
-// openFolder asks for a repository and opens it.
+// activeReviewWindow returns the focused review window, or the first one if any.
+func activeReviewWindow() *window {
+	windowsMu.Lock()
+	defer windowsMu.Unlock()
+	if len(windows) == 0 {
+		return nil
+	}
+	for _, w := range windows {
+		if w.win != nil && w.win.IsFocused() {
+			return w
+		}
+	}
+	return windows[0]
+}
+
+// openFolder asks for repositories and opens them.
 func openFolder() {
 	go func() {
-		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Title: "Open a Git Repository", Directory: true})
+		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+			Title:     "Open Git Repositories",
+			Directory: true,
+			Multiple:  true,
+		})
 		if err != nil || len(paths) == 0 {
 			return
 		}
-		if err := openWindow(paths[0], source{kind: sourceWorkingTree}); err != nil {
+		w := activeReviewWindow()
+		if w != nil && w.win != nil {
+			w.win.Update(func() {
+				if err := w.addProjects(paths); err != nil {
+					mygo.Dialog.Error("Could not open the folders", errorText(err))
+				}
+			})
+			closeWelcome()
+			return
+		}
+
+		// When no window is open yet, open the first valid repository and add the rest.
+		var first string
+		for _, p := range paths {
+			if _, err := git.Open(p); err == nil {
+				first = p
+				break
+			}
+		}
+		if first == "" {
+			first = paths[0]
+		}
+		if err := openWindow(first, source{kind: sourceWorkingTree}); err != nil {
 			mygo.Dialog.Error("Could not open the folder", errorText(err))
 			return
 		}
 		closeWelcome()
+
+		// Add remaining paths to the newly opened window
+		if len(paths) > 1 {
+			if nw := activeReviewWindow(); nw != nil && nw.win != nil {
+				nw.win.Update(func() {
+					_ = nw.addProjects(paths)
+				})
+			}
+		}
 	}()
 }
 
@@ -212,6 +263,16 @@ func recentMenuItems() []*mygo.MenuItem {
 
 // openRecent opens a repository of File → Open Recent.
 func openRecent(root string) {
+	w := activeReviewWindow()
+	if w != nil && w.win != nil {
+		w.win.Update(func() {
+			if err := w.addProject(root, true); err != nil {
+				mygo.Dialog.Error("Could not open "+abbreviateHome(root), errorText(err))
+			}
+		})
+		closeWelcome()
+		return
+	}
 	if err := openWindow(root, source{kind: sourceWorkingTree}); err != nil {
 		mygo.Dialog.Error("Could not open "+abbreviateHome(root), errorText(err))
 		return
