@@ -262,6 +262,8 @@ func (w *window) sidebar(c *ui.Context) {
 			if mac {
 				ui.Spacer(c)
 			}
+			// Left-top Sidebar Projects Split Toggle (switch style)
+			w.sidebarProjectsSwitch(c, pal)
 			if w.tabControl(c) {
 				w.commitOpen = false
 			}
@@ -270,11 +272,86 @@ func (w *window) sidebar(c *ui.Context) {
 				ui.Spacer(c)
 			}
 		})
-		w.projectBar(c, pal)
-		if w.tab == 2 && !w.gh.ok() {
-			w.tab = 0
+
+		h := w.sidebarProjectsHeight
+		if h <= 0 {
+			h = 220
 		}
-		ui.Column(c).Padding(2, 10, 8).Children(func() {
+
+		if w.sidebarProjectsShown {
+			// Shared sidebar split mode: popover button hidden
+			if w.sidebarProjectsOnTop {
+				// Default: Projects list on top, Tab views below
+				w.sidebarProjectsPanel(c, pal, h, false)
+				w.sidebarProjectsResizer(c, pal)
+				w.sidebarTabPanel(c, pal, 0, true)
+			} else {
+				// Swapped: Tab views on top, Projects list below
+				w.sidebarTabPanel(c, pal, 0, true)
+				w.sidebarProjectsResizer(c, pal)
+				w.sidebarProjectsPanel(c, pal, h, false)
+			}
+		} else {
+			// Normal single panel mode with popover button
+			w.projectBar(c, pal)
+			w.sidebarTabPanel(c, pal, 0, true)
+		}
+
+		w.sidebarFooter(c, pal)
+	})
+}
+
+// sidebarProjectsSwitch renders the toggle switch for shared sidebar projects split.
+func (w *window) sidebarProjectsSwitch(c *ui.Context, pal *palette) {
+	t := c.Theme()
+	track := ui.Row(c).Padding(2).Radius(8).Background(ui.RGBA(127, 127, 127, 0.1)).AlignItems(ui.Center)
+	btn := ui.ButtonBase(c).Size(30, 24).Radius(6).Center().Label("Toggle Projects Split").
+		Tooltip("Toggle projects split in sidebar").Cursor(ui.CursorPointer)
+	if w.sidebarProjectsShown {
+		btn.Background(pal.headerBg).Shadow(0, 1, 2, 0, ui.RGBA(0, 0, 0, 0.12)).TextColor(t.Accent)
+	} else {
+		btn.TextColor(t.TextMuted)
+		if btn.Hovered() {
+			btn.Background(ui.RGBA(127, 127, 127, 0.08))
+		}
+	}
+	if btn.Clicked() {
+		w.sidebarProjectsShown = !w.sidebarProjectsShown
+		go state.setSidebarProjects(w.sidebarProjectsShown, w.sidebarProjectsHeight, w.sidebarProjectsOnTop)
+	}
+	track.Children(func() {
+		btn.Children(func() {
+			ui.Icon(c, iconSplitVertical).FontSize(14)
+		})
+	})
+}
+
+// sidebarProjectsPanel renders the loaded projects list inside the sidebar split.
+func (w *window) sidebarProjectsPanel(c *ui.Context, pal *palette, h float32, grow bool) {
+	col := ui.Column(c).Padding(2, 6, 4, 6)
+	if grow {
+		col.Grow(1).FillHeight()
+	} else {
+		col.Height(h).Shrink(0)
+	}
+	col.Children(func() {
+		w.projectListContent(c, pal, false)
+	})
+}
+
+// sidebarTabPanel renders the search input and current tab content (files, history, pulls).
+func (w *window) sidebarTabPanel(c *ui.Context, pal *palette, h float32, grow bool) {
+	if w.tab == 2 && !w.gh.ok() {
+		w.tab = 0
+	}
+	col := ui.Column(c)
+	if grow {
+		col.Grow(1).FillHeight()
+	} else {
+		col.Height(h).Shrink(0)
+	}
+	col.Children(func() {
+		ui.Column(c).Padding(2, 10, 8).Shrink(0).Children(func() {
 			switch w.tab {
 			case 0:
 				if searchInput(c, &w.filter, "Filter files", &w.filterFocus, &w.typing) {
@@ -296,7 +373,46 @@ func (w *window) sidebar(c *ui.Context) {
 		default:
 			w.pullsView(c)
 		}
-		w.sidebarFooter(c, pal)
+	})
+}
+
+// sidebarProjectsResizer renders a horizontal splitter with a centered round swap button.
+func (w *window) sidebarProjectsResizer(c *ui.Context, pal *palette) {
+	t := c.Theme()
+	ui.Box(c).Height(18).FillWidth().AlignItems(ui.Center).Justify(ui.Center).Shrink(0).Children(func() {
+		// Underlying 1px divider line
+		ui.Box(c).Absolute().Left(0).Right(0).Height(1).Background(pal.cardBorder)
+
+		// Drag handle overlay
+		handle := ui.Box(c).Absolute().Top(0).Bottom(0).Left(0).Right(0).Cursor(ui.CursorResizeNS)
+		if _, dy, held := handle.Dragged(); held {
+			if w.sidebarProjectsOnTop {
+				w.dragSidebarProjectsHeight += dy
+			} else {
+				w.dragSidebarProjectsHeight -= dy
+			}
+			w.sidebarProjectsHeight = min(max(w.dragSidebarProjectsHeight, 100), 600)
+		} else {
+			if w.dragSidebarProjectsHeight != 0 && w.dragSidebarProjectsHeight != w.sidebarProjectsHeight {
+				w.dragSidebarProjectsHeight = w.sidebarProjectsHeight
+				go state.setSidebarProjects(w.sidebarProjectsShown, w.sidebarProjectsHeight, w.sidebarProjectsOnTop)
+			}
+		}
+
+		// Centered small round swap button
+		btn := ui.ButtonBase(c).Size(22, 22).Radius(11).Center().Cursor(ui.CursorPointer).
+			Background(pal.headerBg).Border(1, pal.cardBorder).
+			Shadow(0, 1, 3, 0, ui.RGBA(0, 0, 0, 0.12)).Tooltip("Swap sections")
+		if btn.Hovered() {
+			btn.Background(ui.RGBA(127, 127, 127, 0.15))
+		}
+		if btn.Clicked() {
+			w.sidebarProjectsOnTop = !w.sidebarProjectsOnTop
+			go state.setSidebarProjects(w.sidebarProjectsShown, w.sidebarProjectsHeight, w.sidebarProjectsOnTop)
+		}
+		btn.Children(func() {
+			ui.Icon(c, iconSwapVertical).FontSize(11).TextColor(t.TextMuted)
+		})
 	})
 }
 
@@ -352,168 +468,7 @@ func (w *window) projectBar(c *ui.Context, pal *palette) {
 			Shadow(0, 10, 30, 0, ui.RGBA(0, 0, 0, 0.22)).Label("Loaded Projects")
 
 		panel.Children(func() {
-			// Header
-			ui.Row(c).Height(24).Padding(2, 6).Justify(ui.SpaceBetween).Children(func() {
-				ui.Text(c, "LOADED PROJECTS").FontSize(10).FontWeight(700).TextColor(t.TextMuted)
-				ui.Textf(c, "%d open", len(w.projects)).FontSize(10).TextColor(t.TextMuted)
-			})
-
-			// Project items list
-			ui.Column(c).Gap(2).Children(func() {
-				projects := slices.Clone(w.projects)
-				swapped := false
-				for _, proj := range projects {
-					p := proj
-					isActive := w.repo != nil && samePath(w.repo.Root, p)
-					valid := isProjectValid(p)
-					name := filepath.Base(p)
-					dispPath := abbreviateHome(p)
-
-					isDraggingThis := w.projectDragID == p && w.projectDragging
-
-					row := ui.Row(c.Key("proj:" + p)).MinHeight(36).Padding(5, 8).Gap(8).Radius(6).MinWidth(0)
-					if isDraggingThis {
-						row.Top(w.projectDragDY).Shadow(0, 8, 20, 0, ui.RGBA(0, 0, 0, 0.35)).
-							Background(pal.headerBg).Border(1, t.Accent.Alpha(0.6)).Cursor(ui.CursorGrabbing)
-					} else if valid {
-						row.Cursor(ui.CursorGrab)
-					}
-					if isActive && !isDraggingThis {
-						row.Background(t.Accent.Alpha(0.12))
-					} else if row.Hovered() && !isDraggingThis {
-						row.Background(ui.RGBA(127, 127, 127, 0.08))
-					}
-					if !valid {
-						row.Opacity(0.55)
-					}
-
-					justDropped := false
-					// Drag reordering handling
-					if _, dy, held := row.Dragged(); held {
-						if w.projectDragID == "" {
-							w.projectDragID = p
-							w.projectDragDY = 0
-							w.projectDragging = false
-						}
-						if w.projectDragID == p {
-							w.projectDragDY += dy
-							if !w.projectDragging && (w.projectDragDY > 3 || w.projectDragDY < -3) {
-								w.projectDragging = true
-							}
-							if w.projectDragging {
-								w.projectDragCooldown = 2
-								if !swapped {
-									cur := slices.Index(w.projects, p)
-									const itemStep = float32(38)
-									if cur >= 0 {
-										if w.projectDragDY > itemStep*0.55 && cur+1 < len(w.projects) {
-											w.reorderProject(cur, cur+1)
-											w.projectDragDY -= itemStep
-											swapped = true
-										} else if w.projectDragDY < -itemStep*0.55 && cur > 0 {
-											w.reorderProject(cur, cur-1)
-											w.projectDragDY += itemStep
-											swapped = true
-										}
-									}
-								}
-							}
-						}
-					} else if w.projectDragID == p {
-						if w.projectDragging {
-							justDropped = true
-							w.projectDragCooldown = 2
-							go state.setProjects(w.projects)
-						}
-						w.projectDragID = ""
-						w.projectDragDY = 0
-						w.projectDragging = false
-					}
-
-					// Only allow switching to valid projects when cleanly clicked (not dragging, not dropped, not in cooldown)
-					if row.Clicked() && valid && !w.projectDragging && w.projectDragID == "" && !justDropped && w.projectDragCooldown == 0 {
-						w.projectPopoverOpen = false
-						_ = w.switchProject(p)
-					}
-
-					row.Children(func() {
-						// Folder or Alert Icon
-						icon := iconFolder
-						if !valid {
-							icon = iconAlert
-						} else if isActive {
-							icon = iconFolderOpen
-						}
-						ic := ui.Icon(c, icon).FontSize(15).Shrink(0)
-						switch {
-						case !valid:
-							ic.TextColor(t.Danger)
-						case isActive:
-							ic.TextColor(t.Accent)
-						default:
-							ic.TextColor(t.TextMuted)
-						}
-
-						// Project Name & Path
-						ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(1).Children(func() {
-							ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
-								n := ui.Text(c, name).FontSize(12).FontWeight(600).SingleLine().Shrink(1).MinWidth(0)
-								if isActive && valid {
-									n.TextColor(t.Accent)
-								} else if !valid {
-									n.TextColor(t.TextMuted)
-								}
-								if !valid {
-									ui.Text(c, "已失效").FontSize(9).FontWeight(600).Padding(1, 4).
-										Radius(3).Background(t.Danger.Alpha(0.15)).TextColor(t.Danger).Shrink(0)
-								}
-							})
-							ui.Text(c, dispPath).FontSize(10).TextColor(t.TextMuted).SingleLine()
-						})
-
-						// Active Indicator
-						if isActive && valid {
-							ui.Icon(c, iconCheck).FontSize(13).TextColor(t.Accent).Shrink(0)
-						}
-
-						// Allow removing from the list (always for invalid, or when count > 1)
-						if len(w.projects) > 1 || !valid {
-							rmTip := "Remove from list"
-							if !valid {
-								rmTip = "Remove invalid project"
-							}
-							rm := ui.ButtonBase(c).Size(18, 18).Radius(4).Center().Label("Remove project from list").
-								Tooltip(rmTip).KeepFocus().Cursor(ui.CursorPointer)
-							if rm.Hovered() {
-								rm.Background(ui.RGBA(127, 127, 127, 0.2))
-							}
-							rm.Children(func() {
-								ui.Icon(c, iconClose).FontSize(10).TextColor(t.TextMuted)
-							})
-							if rm.Clicked() {
-								w.removeProject(p)
-							}
-						}
-					})
-				}
-			})
-
-			// Divider
-			ui.Box(c).Height(1).Margin(4, 2).Background(pal.cardBorder)
-
-			// "Open Folder..." action button
-			openBtn := ui.Row(c).Height(28).Padding(0, 8).Gap(6).Radius(6).Cursor(ui.CursorPointer).MinWidth(0)
-			if openBtn.Hovered() {
-				openBtn.Background(ui.RGBA(127, 127, 127, 0.1))
-			}
-			if openBtn.Clicked() {
-				w.projectPopoverOpen = false
-				openFolder()
-			}
-			openBtn.Children(func() {
-				ui.Icon(c, iconPlus).FontSize(12).TextColor(t.TextMuted)
-				ui.Text(c, "Open Folder…").FontSize(12).TextColor(t.Text)
-			})
+			w.projectListContent(c, pal, true)
 		})
 	})
 
@@ -521,6 +476,187 @@ func (w *window) projectBar(c *ui.Context, pal *palette) {
 	if w.projectDragCooldown > 0 || w.projectDragging || w.projectDragID != "" {
 		w.projectPopoverOpen = true
 	}
+}
+
+// projectListContent renders the loaded projects list with drag reordering,
+// used both in popover mode and directly inside the sidebar split panel.
+func (w *window) projectListContent(c *ui.Context, pal *palette, inPopover bool) {
+	t := c.Theme()
+	// Header
+	ui.Row(c).Height(24).Padding(2, 6).Justify(ui.SpaceBetween).Children(func() {
+		ui.Text(c, "LOADED PROJECTS").FontSize(10).FontWeight(700).TextColor(t.TextMuted)
+		ui.Textf(c, "%d open", len(w.projects)).FontSize(10).TextColor(t.TextMuted)
+	})
+
+	renderItems := func() {
+		ui.Column(c).Gap(2).Children(func() {
+			projects := slices.Clone(w.projects)
+			swapped := false
+			for _, proj := range projects {
+				p := proj
+				isActive := w.repo != nil && samePath(w.repo.Root, p)
+				valid := isProjectValid(p)
+				name := filepath.Base(p)
+				dispPath := abbreviateHome(p)
+
+			isDraggingThis := w.projectDragID == p && w.projectDragging
+
+			row := ui.Row(c.Key("proj:" + p)).MinHeight(36).Padding(5, 8).Gap(8).Radius(6).MinWidth(0)
+			if isDraggingThis {
+				row.Top(w.projectDragDY).Shadow(0, 8, 20, 0, ui.RGBA(0, 0, 0, 0.35)).
+					Background(pal.headerBg).Border(1, t.Accent.Alpha(0.6)).Cursor(ui.CursorGrabbing)
+			} else if valid {
+				row.Cursor(ui.CursorGrab)
+			}
+			if isActive && !isDraggingThis {
+				row.Background(t.Accent.Alpha(0.12))
+			} else if row.Hovered() && !isDraggingThis {
+				row.Background(ui.RGBA(127, 127, 127, 0.08))
+			}
+			if !valid {
+				row.Opacity(0.55)
+			}
+
+			justDropped := false
+			// Drag reordering handling
+			if _, dy, held := row.Dragged(); held {
+				if w.projectDragID == "" {
+					w.projectDragID = p
+					w.projectDragDY = 0
+					w.projectDragging = false
+				}
+				if w.projectDragID == p {
+					w.projectDragDY += dy
+					if !w.projectDragging && (w.projectDragDY > 3 || w.projectDragDY < -3) {
+						w.projectDragging = true
+					}
+					if w.projectDragging {
+						w.projectDragCooldown = 2
+						if !swapped {
+							cur := slices.Index(w.projects, p)
+							const itemStep = float32(38)
+							if cur >= 0 {
+								if w.projectDragDY > itemStep*0.55 && cur+1 < len(w.projects) {
+									w.reorderProject(cur, cur+1)
+									w.projectDragDY -= itemStep
+									swapped = true
+								} else if w.projectDragDY < -itemStep*0.55 && cur > 0 {
+									w.reorderProject(cur, cur-1)
+									w.projectDragDY += itemStep
+									swapped = true
+								}
+							}
+						}
+					}
+				}
+			} else if w.projectDragID == p {
+				if w.projectDragging {
+					justDropped = true
+					w.projectDragCooldown = 2
+					go state.setProjects(w.projects)
+				}
+				w.projectDragID = ""
+				w.projectDragDY = 0
+				w.projectDragging = false
+			}
+
+			// Only allow switching to valid projects when cleanly clicked (not dragging, not dropped, not in cooldown)
+			if row.Clicked() && valid && !w.projectDragging && w.projectDragID == "" && !justDropped && w.projectDragCooldown == 0 {
+				if inPopover {
+					w.projectPopoverOpen = false
+				}
+				_ = w.switchProject(p)
+			}
+
+			row.Children(func() {
+				// Folder or Alert Icon
+				icon := iconFolder
+				if !valid {
+					icon = iconAlert
+				} else if isActive {
+					icon = iconFolderOpen
+				}
+				ic := ui.Icon(c, icon).FontSize(15).Shrink(0)
+				switch {
+				case !valid:
+					ic.TextColor(t.Danger)
+				case isActive:
+					ic.TextColor(t.Accent)
+				default:
+					ic.TextColor(t.TextMuted)
+				}
+
+				// Project Name & Path
+				ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(1).Children(func() {
+					ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
+						n := ui.Text(c, name).FontSize(12).FontWeight(600).SingleLine().Shrink(1).MinWidth(0)
+						if isActive && valid {
+							n.TextColor(t.Accent)
+						} else if !valid {
+							n.TextColor(t.TextMuted)
+						}
+						if !valid {
+							ui.Text(c, "已失效").FontSize(9).FontWeight(600).Padding(1, 4).
+								Radius(3).Background(t.Danger.Alpha(0.15)).TextColor(t.Danger).Shrink(0)
+						}
+					})
+					ui.Text(c, dispPath).FontSize(10).TextColor(t.TextMuted).SingleLine()
+				})
+
+				// Active Indicator
+				if isActive && valid {
+					ui.Icon(c, iconCheck).FontSize(13).TextColor(t.Accent).Shrink(0)
+				}
+
+				// Allow removing from the list (always for invalid, or when count > 1)
+				if len(w.projects) > 1 || !valid {
+					rmTip := "Remove from list"
+					if !valid {
+						rmTip = "Remove invalid project"
+					}
+					rm := ui.ButtonBase(c).Size(18, 18).Radius(4).Center().Label("Remove project from list").
+						Tooltip(rmTip).KeepFocus().Cursor(ui.CursorPointer)
+					if rm.Hovered() {
+						rm.Background(ui.RGBA(127, 127, 127, 0.2))
+					}
+					rm.Children(func() {
+						ui.Icon(c, iconClose).FontSize(10).TextColor(t.TextMuted)
+					})
+					if rm.Clicked() {
+						w.removeProject(p)
+					}
+				}
+			})
+		}
+	})
+}
+
+	if inPopover {
+		renderItems()
+	} else {
+		ui.Scroll(c).Grow(1).Children(func() {
+			renderItems()
+		})
+	}
+
+	// Divider
+	ui.Box(c).Height(1).Margin(4, 2).Background(pal.cardBorder).Shrink(0)
+
+	// "Open Folder..." action button
+	openBtn := ui.Row(c).Height(28).Padding(0, 8).Gap(6).Radius(6).Cursor(ui.CursorPointer).MinWidth(0).Shrink(0)
+	if openBtn.Hovered() {
+		openBtn.Background(ui.RGBA(127, 127, 127, 0.1))
+	}
+	if openBtn.Clicked() {
+		if inPopover {
+			w.projectPopoverOpen = false
+		}
+		openFolder()
+	}
+	openBtn.Children(func() {
+		ui.Icon(c, iconPlus).FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, "Open Folder…").FontSize(12).TextColor(t.Text)
+	})
 }
 
 // sidebarBg is the sidebar's background: none on macOS, where the

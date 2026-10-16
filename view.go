@@ -160,15 +160,33 @@ func (w *window) toolbar(c *ui.Context, pal *palette) {
 			w.groupControl(c, pal)
 			w.layoutControl(c, pal)
 
-			// Toggle Branch & Commit Graph panel
-			gb := iconButton(c, iconGitGraph, "Toggle Branch & Commit Graph (⌘G)")
-			if w.gitGraphShown {
-				gb.Background(pal.headerBg).TextColor(t.Accent).Shadow(0, 1, 2, 0, ui.RGBA(0, 0, 0, 0.12))
-			}
-			if gb.Clicked() {
-				w.toggleGitGraph()
-			}
+			// Toggle Branch & Commit Graph panel with matching switch styling
+			w.gitGraphControl(c, pal)
 		}
+	})
+}
+
+// gitGraphControl renders the toggle switch for the top branch & commit graph panel.
+func (w *window) gitGraphControl(c *ui.Context, pal *palette) {
+	t := c.Theme()
+	track := ui.Row(c).Padding(2).Radius(8).Background(ui.RGBA(127, 127, 127, 0.1)).AlignItems(ui.Center)
+	btn := ui.ButtonBase(c).Size(30, 24).Radius(6).Center().Label("Toggle Branch & Commit Graph (⌘G)").
+		Tooltip("Toggle Branch & Commit Graph (⌘G)").Cursor(ui.CursorPointer)
+	if w.gitGraphShown {
+		btn.Background(pal.headerBg).Shadow(0, 1, 2, 0, ui.RGBA(0, 0, 0, 0.12)).TextColor(t.Accent)
+	} else {
+		btn.TextColor(t.TextMuted)
+		if btn.Hovered() {
+			btn.Background(ui.RGBA(127, 127, 127, 0.08))
+		}
+	}
+	if btn.Clicked() {
+		w.toggleGitGraph()
+	}
+	track.Children(func() {
+		btn.Children(func() {
+			ui.Icon(c, iconGitGraph).FontSize(14)
+		})
 	})
 }
 

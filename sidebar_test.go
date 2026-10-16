@@ -337,3 +337,65 @@ func TestProjectDragReorder(t *testing.T) {
 	}
 }
 
+func TestSidebarProjectsSplitAndSwap(t *testing.T) {
+	state.setProjects(nil)
+	defer state.setProjects(nil)
+
+	repo1 := testRepo(t)
+	repo2 := testRepo(t)
+
+	w, tt := newTestWindow(t, repo1)
+	if err := w.addProject(repo2, false); err != nil {
+		t.Fatalf("addProject failed: %v", err)
+	}
+
+	// 1. Verify defaults
+	if !w.sidebarProjectsShown {
+		t.Fatal("expected sidebarProjectsShown to default to true")
+	}
+	if !w.sidebarProjectsOnTop {
+		t.Fatal("expected sidebarProjectsOnTop to default to true")
+	}
+
+	tt.Frame()
+
+	// 2. In split mode, LOADED PROJECTS is embedded directly in sidebar
+	if !tt.HasText("LOADED PROJECTS") {
+		t.Fatalf("expected 'LOADED PROJECTS' in sidebar split, texts: %v", tt.Texts())
+	}
+
+	// 3. Toggle off: switch to popover mode
+	w.sidebarProjectsShown = false
+	tt.Frame()
+
+	// In non-split mode, projectBar is shown (showing base name of repo)
+	base := filepath.Base(repo1)
+	if !tt.HasText(base) {
+		t.Fatalf("expected projectBar with name %s, texts: %v", base, tt.Texts())
+	}
+
+	// 4. Toggle back on
+	w.sidebarProjectsShown = true
+	tt.Frame()
+	if !tt.HasText("LOADED PROJECTS") {
+		t.Fatal("expected 'LOADED PROJECTS' restored in split mode")
+	}
+
+	// 5. Test Swap (onTop toggle)
+	w.sidebarProjectsOnTop = false
+	tt.Frame()
+	if w.sidebarProjectsOnTop {
+		t.Fatal("expected sidebarProjectsOnTop to be false after swap")
+	}
+
+	// 6. Test Persistence
+	state.setSidebarProjects(false, 310, false)
+	shown, height, onTop := state.sidebarProjects()
+	if shown || height != 310 || onTop {
+		t.Fatalf("unexpected state: shown=%v, height=%f, onTop=%v", shown, height, onTop)
+	}
+
+	// Restore default state for other tests
+	state.setSidebarProjects(true, 220, true)
+}
+

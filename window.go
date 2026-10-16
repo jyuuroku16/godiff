@@ -139,6 +139,12 @@ type window struct {
 	gitBranchTreeList  ui.ListState
 	gitSelectedHash    string
 
+	// The sidebar projects split panel.
+	sidebarProjectsShown      bool
+	sidebarProjectsHeight     float32
+	dragSidebarProjectsHeight float32
+	sidebarProjectsOnTop      bool
+
 	// The diff surface.
 	rows       []row
 	rowsDirty  bool
@@ -328,6 +334,7 @@ func openWindow(dir string, src source) error {
 func newWindow(repo *git.Repo, src source) *window {
 	width, shown := state.layout()
 	gitH, gitBW, gitShown := state.gitLayout()
+	sbProjShown, sbProjHeight, sbProjOnTop := state.sidebarProjects()
 	projects := state.projects()
 	hasRoot := false
 	for _, p := range projects {
@@ -342,29 +349,33 @@ func newWindow(repo *git.Repo, src source) *window {
 	}
 
 	w := &window{
-		repo:               repo,
-		launch:             src,
-		source:             src,
-		settings:           cfg.Get(),
-		sidebarShown:       shown,
-		sidebarWidth:       width,
-		gitGraphShown:      gitShown,
-		gitGraphHeight:     gitH,
-		gitBranchWidth:     gitBW,
-		gitTreeCollapsed:   map[string]bool{},
-		projects:           projects,
-		projectStates:      map[string]*projectState{},
-		historyLimit:       historyPage,
-		viewed:             state.viewed(viewedKey(repo.Root, src)),
-		hscroll:            map[string]float32{},
-		closedDirs:         map[string]bool{},
-		commitTimes:        map[string]commitTime{},
-		reloaded:           map[string]bool{},
-		fileMatches:        map[int]bool{},
-		selFile:            -1,
-		selHunk:            -1,
-		prs:                map[source]*pullState{},
-		analyses:           map[source]*analysisState{},
+		repo:                      repo,
+		launch:                    src,
+		source:                    src,
+		settings:                  cfg.Get(),
+		sidebarShown:              shown,
+		sidebarWidth:              width,
+		gitGraphShown:             gitShown,
+		gitGraphHeight:            gitH,
+		gitBranchWidth:            gitBW,
+		gitTreeCollapsed:          map[string]bool{},
+		sidebarProjectsShown:      sbProjShown,
+		sidebarProjectsHeight:     sbProjHeight,
+		dragSidebarProjectsHeight: sbProjHeight,
+		sidebarProjectsOnTop:      sbProjOnTop,
+		projects:                  projects,
+		projectStates:             map[string]*projectState{},
+		historyLimit:              historyPage,
+		viewed:                    state.viewed(viewedKey(repo.Root, src)),
+		hscroll:                   map[string]float32{},
+		closedDirs:                map[string]bool{},
+		commitTimes:               map[string]commitTime{},
+		reloaded:                  map[string]bool{},
+		fileMatches:               map[int]bool{},
+		selFile:                   -1,
+		selHunk:                   -1,
+		prs:                       map[source]*pullState{},
+		analyses:                  map[source]*analysisState{},
 	}
 	w.gh, _ = findGitHubRemote(repo, github.Repo{})
 	if src.kind == sourcePull {

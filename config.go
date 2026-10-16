@@ -292,6 +292,10 @@ type storeData struct {
 	GitGraphShown  *bool   `json:"gitGraphShown,omitempty"`
 	GitGraphHeight float32 `json:"gitGraphHeight,omitempty"`
 	GitBranchWidth float32 `json:"gitBranchWidth,omitempty"`
+	// Sidebar Projects layout preferences
+	SidebarProjectsShown  *bool   `json:"sidebarProjectsShown,omitempty"`
+	SidebarProjectsHeight float32 `json:"sidebarProjectsHeight,omitempty"`
+	SidebarProjectsOnTop  *bool   `json:"sidebarProjectsOnTop,omitempty"`
 	// LastRepository is the repository opened last, as kept before Recent.
 	LastRepository string `json:"lastRepository,omitempty"`
 }
@@ -391,6 +395,33 @@ func (s *store) setGitLayout(height, branchWidth float32, shown bool) {
 	s.data.GitGraphHeight = height
 	s.data.GitBranchWidth = branchWidth
 	s.data.GitGraphShown = &shown
+	s.mu.Unlock()
+	s.save()
+}
+
+func (s *store) sidebarProjects() (shown bool, height float32, onTop bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	shown = true
+	if s.data.SidebarProjectsShown != nil {
+		shown = *s.data.SidebarProjectsShown
+	}
+	height = s.data.SidebarProjectsHeight
+	if height <= 0 {
+		height = 220
+	}
+	onTop = true
+	if s.data.SidebarProjectsOnTop != nil {
+		onTop = *s.data.SidebarProjectsOnTop
+	}
+	return
+}
+
+func (s *store) setSidebarProjects(shown bool, height float32, onTop bool) {
+	s.mu.Lock()
+	s.data.SidebarProjectsShown = &shown
+	s.data.SidebarProjectsHeight = height
+	s.data.SidebarProjectsOnTop = &onTop
 	s.mu.Unlock()
 	s.save()
 }
