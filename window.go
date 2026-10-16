@@ -122,6 +122,23 @@ type window struct {
 	reloaded  map[string]bool
 	dragWidth float32
 
+	// The top Git graph and branch tree panel.
+	gitGraphShown      bool
+	gitGraphHeight     float32
+	dragGitGraphHeight float32
+	gitBranchWidth     float32
+	dragGitBranchWidth float32
+	gitAllCommits      []git.Commit
+	gitRefs            []git.Ref
+	gitGraphLayout     *GraphLayout
+	gitGraphLoading    bool
+	gitFilter          string
+	gitFilterFocus     bool
+	gitTreeCollapsed   map[string]bool
+	gitGraphList       ui.ListState
+	gitBranchTreeList  ui.ListState
+	gitSelectedHash    string
+
 	// The diff surface.
 	rows       []row
 	rowsDirty  bool
@@ -300,6 +317,7 @@ func openWindow(dir string, src source) error {
 	w.load()
 	w.loadHistory()
 	w.loadUser()
+	w.loadGitGraph()
 	go w.watch(stop)
 	w.captureIfAsked()
 	return nil
@@ -309,6 +327,7 @@ func openWindow(dir string, src source) error {
 // repository.
 func newWindow(repo *git.Repo, src source) *window {
 	width, shown := state.layout()
+	gitH, gitBW, gitShown := state.gitLayout()
 	projects := state.projects()
 	hasRoot := false
 	for _, p := range projects {
@@ -323,25 +342,29 @@ func newWindow(repo *git.Repo, src source) *window {
 	}
 
 	w := &window{
-		repo:          repo,
-		launch:        src,
-		source:        src,
-		settings:      cfg.Get(),
-		sidebarShown:  shown,
-		sidebarWidth:  width,
-		projects:      projects,
-		projectStates: map[string]*projectState{},
-		historyLimit:  historyPage,
-		viewed:        state.viewed(viewedKey(repo.Root, src)),
-		hscroll:       map[string]float32{},
-		closedDirs:    map[string]bool{},
-		commitTimes:   map[string]commitTime{},
-		reloaded:      map[string]bool{},
-		fileMatches:   map[int]bool{},
-		selFile:       -1,
-		selHunk:       -1,
-		prs:           map[source]*pullState{},
-		analyses:      map[source]*analysisState{},
+		repo:               repo,
+		launch:             src,
+		source:             src,
+		settings:           cfg.Get(),
+		sidebarShown:       shown,
+		sidebarWidth:       width,
+		gitGraphShown:      gitShown,
+		gitGraphHeight:     gitH,
+		gitBranchWidth:     gitBW,
+		gitTreeCollapsed:   map[string]bool{},
+		projects:           projects,
+		projectStates:      map[string]*projectState{},
+		historyLimit:       historyPage,
+		viewed:             state.viewed(viewedKey(repo.Root, src)),
+		hscroll:            map[string]float32{},
+		closedDirs:         map[string]bool{},
+		commitTimes:        map[string]commitTime{},
+		reloaded:           map[string]bool{},
+		fileMatches:        map[int]bool{},
+		selFile:            -1,
+		selHunk:            -1,
+		prs:                map[source]*pullState{},
+		analyses:           map[source]*analysisState{},
 	}
 	w.gh, _ = findGitHubRemote(repo, github.Repo{})
 	if src.kind == sourcePull {
@@ -349,6 +372,8 @@ func newWindow(repo *git.Repo, src source) *window {
 	}
 	w.loadAnalysis(src)
 	w.dragWidth = w.sidebarWidth
+	w.dragGitGraphHeight = w.gitGraphHeight
+	w.dragGitBranchWidth = w.gitBranchWidth
 	w.list.Key = func(i int) any { return w.key(&w.rows[i]) }
 	w.list.Header = func(i int) bool { return w.rows[i].kind == rowHeader }
 	return w
@@ -616,6 +641,7 @@ func (w *window) switchProject(root string) error {
 	w.load()
 	w.loadHistory()
 	w.loadUser()
+	w.loadGitGraph()
 	w.invalidate()
 	return nil
 }

@@ -288,6 +288,10 @@ type storeData struct {
 	Recent []string `json:"recent"`
 	// Projects are the loaded projects displayed in the window.
 	Projects []string `json:"projects,omitempty"`
+	// GitGraph layout preferences
+	GitGraphShown  *bool   `json:"gitGraphShown,omitempty"`
+	GitGraphHeight float32 `json:"gitGraphHeight,omitempty"`
+	GitBranchWidth float32 `json:"gitBranchWidth,omitempty"`
 	// LastRepository is the repository opened last, as kept before Recent.
 	LastRepository string `json:"lastRepository,omitempty"`
 }
@@ -360,6 +364,33 @@ func (s *store) layout() (width float32, shown bool) {
 func (s *store) setLayout(width float32, shown bool) {
 	s.mu.Lock()
 	s.data.SidebarWidth, s.data.SidebarShown = width, &shown
+	s.mu.Unlock()
+	s.save()
+}
+
+func (s *store) gitLayout() (height float32, branchWidth float32, shown bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	height = s.data.GitGraphHeight
+	if height <= 0 {
+		height = 280
+	}
+	branchWidth = s.data.GitBranchWidth
+	if branchWidth <= 0 {
+		branchWidth = 200
+	}
+	shown = false
+	if s.data.GitGraphShown != nil {
+		shown = *s.data.GitGraphShown
+	}
+	return
+}
+
+func (s *store) setGitLayout(height, branchWidth float32, shown bool) {
+	s.mu.Lock()
+	s.data.GitGraphHeight = height
+	s.data.GitBranchWidth = branchWidth
+	s.data.GitGraphShown = &shown
 	s.mu.Unlock()
 	s.save()
 }

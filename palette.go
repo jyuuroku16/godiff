@@ -51,6 +51,7 @@ func (w *window) commands() []command {
 		{title: "Open Folder", keys: "⌘O", run: openFolder},
 		{title: "Show File Tree", run: func() { w.tab, w.sidebarShown = 0, true }},
 		{title: "Show History", run: func() { w.tab, w.sidebarShown = 1, true }},
+		{title: "Toggle Branch & Commit Graph", keys: "⌘G", run: w.toggleGitGraph},
 		{title: "Show Pull Requests", keys: "⌘3", run: w.showPulls},
 		{title: "Review with AI", hint: w.agentHint(), keys: "⌘⇧I", run: w.reviewWithAI},
 		{title: "Stop the AI Review", run: w.stopAnalysis},

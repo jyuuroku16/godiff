@@ -159,6 +159,15 @@ func (w *window) toolbar(c *ui.Context, pal *palette) {
 			}
 			w.groupControl(c, pal)
 			w.layoutControl(c, pal)
+
+			// Toggle Branch & Commit Graph panel
+			gb := iconButton(c, iconGitGraph, "Toggle Branch & Commit Graph (⌘G)")
+			if w.gitGraphShown {
+				gb.Background(pal.headerBg).TextColor(t.Accent).Shadow(0, 1, 2, 0, ui.RGBA(0, 0, 0, 0.12))
+			}
+			if gb.Clicked() {
+				w.toggleGitGraph()
+			}
 		}
 	})
 }
@@ -211,111 +220,120 @@ func (w *window) mainArea(c *ui.Context, pal *palette) bool {
 		w.commitView(c)
 		return false
 	}
-	if w.changed {
-		ui.Row(c).Justify(ui.Center).Padding(8, 12, 0).Children(func() {
-			ui.Row(c).Gap(6).Padding(5, 6, 5, 12).Radius(16).Background(pal.viewed.Alpha(0.1).Over(pal.codeBg)).
-				Border(1, pal.viewed.Alpha(0.2)).Children(func() {
-				what := "Local changes detected,"
-				if w.source.kind == sourcePull {
-					what = "New commits were pushed,"
-				}
-				ui.Text(c, what).FontSize(13).FontWeight(600).TextColor(pal.viewed.Mix(t.Text, 0.6))
-				ref := ui.ButtonBase(c).FocusRing(true).Children(func() {
-					ui.Text(c, "refresh to see them.").FontSize(13).FontWeight(600).Underline().TextColor(pal.viewed.Mix(t.Text, 0.6))
+
+	reviewBuilt := false
+	diffArea := func() {
+		if w.changed {
+			ui.Row(c).Justify(ui.Center).Padding(8, 12, 0).Children(func() {
+				ui.Row(c).Gap(6).Padding(5, 6, 5, 12).Radius(16).Background(pal.viewed.Alpha(0.1).Over(pal.codeBg)).
+					Border(1, pal.viewed.Alpha(0.2)).Children(func() {
+					what := "Local changes detected,"
+					if w.source.kind == sourcePull {
+						what = "New commits were pushed,"
+					}
+					ui.Text(c, what).FontSize(13).FontWeight(600).TextColor(pal.viewed.Mix(t.Text, 0.6))
+					ref := ui.ButtonBase(c).FocusRing(true).Children(func() {
+						ui.Text(c, "refresh to see them.").FontSize(13).FontWeight(600).Underline().TextColor(pal.viewed.Mix(t.Text, 0.6))
+					})
+					if ref.Clicked() {
+						w.refresh()
+					}
+					if iconButton(c, iconClose, "Dismiss").Size(22, 22).Clicked() {
+						w.changed = false
+					}
 				})
-				if ref.Clicked() {
-					w.refresh()
-				}
-				if iconButton(c, iconClose, "Dismiss").Size(22, 22).Clicked() {
-					w.changed = false
+			})
+		}
+		if len(w.files) > 0 && w.loadErr == nil {
+			w.scopeBar(c, pal)
+		}
+		find := ui.FindBar(c, &w.finding, &w.query, len(w.matches), &w.match).Label("Find in diffs")
+		if find.FocusWithin() {
+			w.typing = true
+		}
+		if find.Changed() {
+			w.showMatch()
+		}
+		if w.query != w.matchesFor && (w.finding || w.matchesFor != "") {
+			w.rowsDirty = true
+		}
+		if !w.finding && w.matchesFor != "" {
+			w.query = ""
+			w.rowsDirty = true
+		}
+
+		waiting := w.loading && len(w.files) == 0
+		slow := false
+		if waiting {
+			if left := thinkingDelay - time.Since(w.loadStart); left > 0 {
+				c.After(left)
+			} else {
+				slow = true
+			}
+		}
+		if w.source.kind == sourceCommit && w.commit != nil && w.loadErr == nil && len(w.files) == 0 {
+			w.commitMessage(c, pal).Margin(11, 12, 0)
+		}
+		switch {
+		case w.loadErr != nil && w.source.kind == sourcePull:
+			emptyPanel(c, pal, "Unable to open the pull request", errorText(w.loadErr), func() {
+				if ui.Button(c, "Try Again").Clicked() {
+					w.load()
 				}
 			})
-		})
-	}
-	if len(w.files) > 0 && w.loadErr == nil {
-		w.scopeBar(c, pal)
-	}
-	find := ui.FindBar(c, &w.finding, &w.query, len(w.matches), &w.match).Label("Find in diffs")
-	if find.FocusWithin() {
-		w.typing = true
-	}
-	if find.Changed() {
-		w.showMatch()
-	}
-	if w.query != w.matchesFor && (w.finding || w.matchesFor != "") {
-		w.rowsDirty = true
-	}
-	if !w.finding && w.matchesFor != "" {
-		w.query = ""
-		w.rowsDirty = true
+		case w.loadErr != nil:
+			emptyPanel(c, pal, "Unable to read repository", errorText(w.loadErr), nil)
+		case slow:
+			thinking(c, w.loadStatus)
+		case waiting && len(w.files) == 0:
+			ui.Box(c).Grow(1)
+		case len(w.files) == 0:
+			title, detail := "No local changes", abbreviateHome(w.repo.Root)
+			switch w.source.kind {
+			case sourceCommit:
+				title, detail = "No changes in commit", shortHash(w.source.ref)
+			case sourceBranch:
+				title, detail = "No changes", w.source.ref
+			case sourcePull:
+				title, detail = "No changes in pull request", w.source.ref
+			}
+			emptyPanel(c, pal, title, detail, func() {
+				if w.source.kind == sourceWorkingTree && len(w.history) > 0 {
+					if ui.Button(c, "Show History").Clicked() {
+						w.tab, w.sidebarShown = 1, true
+					}
+				}
+			})
+		default:
+			if w.rowsDirty {
+				w.updateMatches()
+				w.buildRows()
+			}
+			if len(w.rows) == 0 {
+				title, detail := "No matching files", strings.TrimSpace(w.filter)
+				if w.searching() {
+					title, detail = "No matches in diffs", strings.TrimSpace(w.query)
+				}
+				if detail == "" {
+					detail = "Whitespace-only changes hidden"
+				}
+				emptyPanel(c, pal, title, detail, nil)
+				return
+			}
+			w.diffList(c)
+			reviewBuilt = true
+		}
 	}
 
-	// A load shows "Thinking…" once it takes long: until then the window
-	// keeps what it showed, so that quick loads change it once.
-	waiting := w.loading && len(w.files) == 0
-	slow := false
-	if waiting {
-		if left := thinkingDelay - time.Since(w.loadStart); left > 0 {
-			c.After(left)
-		} else {
-			slow = true
-		}
+	if w.gitGraphShown {
+		w.gitGraphPanel(c, pal)
+		w.gitPanelResizer(c, pal)
+		ui.Column(c).Grow(1).FillWidth().Children(diffArea)
+	} else {
+		diffArea()
 	}
-	// The commit's message shows at once, from the history, until it
-	// shows atop the changes.
-	if w.source.kind == sourceCommit && w.commit != nil && w.loadErr == nil && len(w.files) == 0 {
-		w.commitMessage(c, pal).Margin(11, 12, 0)
-	}
-	switch {
-	case w.loadErr != nil && w.source.kind == sourcePull:
-		emptyPanel(c, pal, "Unable to open the pull request", errorText(w.loadErr), func() {
-			if ui.Button(c, "Try Again").Clicked() {
-				w.load()
-			}
-		})
-	case w.loadErr != nil:
-		emptyPanel(c, pal, "Unable to read repository", errorText(w.loadErr), nil)
-	case slow:
-		thinking(c, w.loadStatus)
-	case waiting && len(w.files) == 0:
-		ui.Box(c).Grow(1)
-	case len(w.files) == 0:
-		title, detail := "No local changes", abbreviateHome(w.repo.Root)
-		switch w.source.kind {
-		case sourceCommit:
-			title, detail = "No changes in commit", shortHash(w.source.ref)
-		case sourceBranch:
-			title, detail = "No changes", w.source.ref
-		case sourcePull:
-			title, detail = "No changes in pull request", w.source.ref
-		}
-		emptyPanel(c, pal, title, detail, func() {
-			if w.source.kind == sourceWorkingTree && len(w.history) > 0 {
-				if ui.Button(c, "Show History").Clicked() {
-					w.tab, w.sidebarShown = 1, true
-				}
-			}
-		})
-	default:
-		if w.rowsDirty {
-			w.updateMatches()
-			w.buildRows()
-		}
-		if len(w.rows) == 0 {
-			title, detail := "No matching files", strings.TrimSpace(w.filter)
-			if w.searching() {
-				title, detail = "No matches in diffs", strings.TrimSpace(w.query)
-			}
-			if detail == "" {
-				detail = "Whitespace-only changes hidden"
-			}
-			emptyPanel(c, pal, title, detail, nil)
-			return false
-		}
-		w.diffList(c)
-		return true
-	}
-	return false
+
+	return reviewBuilt
 }
 
 // commitMessage shows the message of the commit reviewed.
@@ -376,6 +394,9 @@ func (w *window) shortcuts(c *ui.Context, reviewBuilt bool) {
 	if c.Shortcut(ui.Cmd|ui.Shift, ui.KeyP) {
 		w.paletteOpen = !w.paletteOpen
 		w.paletteRow = 0
+	}
+	if c.Shortcut(ui.Cmd, ui.KeyG) {
+		w.toggleGitGraph()
 	}
 	// Keys that type text belong to the fields: these work while no field
 	// had the focus in the last frame.
