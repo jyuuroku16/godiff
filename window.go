@@ -1349,6 +1349,9 @@ func (w *window) refresh() {
 	if w.pullsLoaded {
 		w.loadPulls()
 	}
+	if w.gitGraphShown {
+		w.loadGitGraph()
+	}
 }
 
 // openInEditor opens a file of the repository in the user's editor, at a

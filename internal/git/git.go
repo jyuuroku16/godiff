@@ -358,6 +358,15 @@ func (r *Repo) StatusSignature() string {
 	return b.String()
 }
 
+// HasUncommitted reports whether there are uncommitted changes in the work tree or index.
+func (r *Repo) HasUncommitted() bool {
+	out, err := r.Git("-c", "core.quotePath=false", "status", "--porcelain=v1", "-uall")
+	if err != nil {
+		return false
+	}
+	return len(bytes.TrimSpace(out)) > 0
+}
+
 // nthField returns what follows the nth space of a record.
 func nthField(rec string, n int) string {
 	for range n {

@@ -106,3 +106,31 @@ func TestParseRefBadges(t *testing.T) {
 		t.Errorf("unexpected badge 3: %+v", badges[3])
 	}
 }
+
+func TestBuildGraphWithoutUncommitted(t *testing.T) {
+	c1 := git.Commit{
+		Hash:    "1111111111111111111111111111111111111111",
+		Short:   "1111111",
+		Subject: "Commit 1",
+		Author:  "Tester",
+		Time:    time.Now().Add(-1 * time.Hour),
+		Refs:    "HEAD -> main",
+	}
+	commits := []git.Commit{c1}
+	layout := BuildGraph(commits, "main", false) // hasUncommitted = false
+
+	if layout == nil {
+		t.Fatal("expected layout not nil")
+	}
+
+	// When no uncommitted changes, rows should only contain the commits (no uncommitted row)
+	if len(layout.Rows) != 1 {
+		t.Fatalf("expected 1 row, got: %d", len(layout.Rows))
+	}
+	if layout.Rows[0].IsUncommitted {
+		t.Errorf("expected first row to NOT be uncommitted when hasUncommitted is false")
+	}
+	if layout.Rows[0].Commit.Hash != c1.Hash {
+		t.Errorf("expected first row to be commit %s, got %s", c1.Hash, layout.Rows[0].Commit.Hash)
+	}
+}

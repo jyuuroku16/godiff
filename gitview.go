@@ -39,12 +39,7 @@ func (w *window) loadGitGraph() {
 		commits, _ := repo.LogAll(0, 1000)
 
 		// Check if worktree has uncommitted changes
-		hasUncommitted := false
-		if w.source.kind == sourceWorkingTree && len(w.files) > 0 {
-			hasUncommitted = true
-		} else {
-			hasUncommitted = repo.StatusSignature() != ""
-		}
+		hasUncommitted := repo.HasUncommitted()
 
 		layout := BuildGraph(commits, curBranch, hasUncommitted)
 

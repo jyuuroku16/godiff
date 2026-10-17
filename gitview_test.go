@@ -279,4 +279,30 @@ func TestGodiffRepoRealGraph(t *testing.T) {
 	if !tt.HasText("Uncommitted changes") {
 		t.Fatalf("expected Uncommitted changes in real repo, texts: %v", tt.Texts())
 	}
+
+	// Now build graph without uncommitted changes (hasUncommitted = false)
+	layoutClean := BuildGraph(commits, w.branch, false)
+	w.gitGraphLayout = layoutClean
+	tt.Frame()
+
+	// Verify "Uncommitted changes" is NOT rendered when hasUncommitted is false
+	if tt.HasText("Uncommitted changes") {
+		t.Fatal("expected 'Uncommitted changes' to NOT be displayed when hasUncommitted is false")
+	}
+
+	// Verify repo.HasUncommitted reports false in clean working tree
+	cleanDir := t.TempDir()
+	gitIn(t, cleanDir, "init", "-q", "-b", "main")
+	gitIn(t, cleanDir, "config", "user.name", "Tester")
+	gitIn(t, cleanDir, "config", "user.email", "test@example.com")
+	writeFile(t, cleanDir, "readme.txt", "hello\n")
+	gitIn(t, cleanDir, "add", ".")
+	gitIn(t, cleanDir, "commit", "-q", "-m", "Initial commit")
+	cleanGitRepo, err := git.Open(cleanDir)
+	if err != nil {
+		t.Fatalf("failed to open clean repo: %v", err)
+	}
+	if cleanGitRepo.HasUncommitted() {
+		t.Fatal("expected clean repo to report false for HasUncommitted")
+	}
 }
