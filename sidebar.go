@@ -279,94 +279,21 @@ func (w *window) sidebar(c *ui.Context) {
 		}
 
 		if w.sidebarProjectsShown {
-			// Animation duration for card-swap layering animation
-			const swapAnimDuration = 320 * time.Millisecond
-			animating := false
-			var upOffset, downOffset float32
-			var topScale float32 = 1.0
-			var topOpacity float32 = 1.0
-			var resizerOpacity float32 = 1.0
-
-			_, winH := c.Size()
-			availH := winH - titleBarHeight - 40 // approximate middle split height
-			if availH < 300 {
-				availH = 500
-			}
-			tabH := availH - h - 22
-			if tabH < 100 {
-				tabH = 100
-			}
-
-			if !w.swapAnimStart.IsZero() {
-				elapsed := time.Since(w.swapAnimStart)
-				if elapsed < swapAnimDuration {
-					c.AnimationFrame()
-					animating = true
-					norm := float32(elapsed) / float32(swapAnimDuration)
-					ease := ui.EaseInOut(norm)
-
-					// Projects travels (tabH + 22), Tab travels (h + 22)
-					projDist := tabH + 22
-					tabDist := h + 22
-
-					if w.sidebarProjectsOnTop {
-						// Target is Projects on top:
-						// Projects moves UP (from +projDist to 0)
-						// Tab moves DOWN (from -tabDist to 0)
-						upOffset = (1.0 - ease) * projDist
-						downOffset = -(1.0 - ease) * tabDist
-					} else {
-						// Target is Tab on top:
-						// Tab moves UP (from +tabDist to 0)
-						// Projects moves DOWN (from -projDist to 0)
-						upOffset = (1.0 - ease) * tabDist
-						downOffset = -(1.0 - ease) * projDist
-					}
-
-					topScale = 0.96 + 0.04*ease
-					topOpacity = 0.75 + 0.25*ease
-					if norm < 0.5 {
-						resizerOpacity = 1.0 - norm*2
-					} else {
-						resizerOpacity = (norm - 0.5) * 2
-					}
-				} else {
-					w.swapAnimStart = time.Time{}
-				}
-			}
-
-			if animating {
-				// During swap animation:
-				// 1. Render panel moving DOWN first (Z-axis bottom, sinks underneath).
-				// 2. Render resizer with fade.
-				// 3. Render panel moving UP second (Z-axis top, elevated with floating shadow and solid background, covers the sinking panel).
-				if w.sidebarProjectsOnTop {
-					// Tab moves DOWN (underneath), Projects moves UP (covers Tab from above)
-					w.sidebarTabPanel(c, pal, 0, true, downOffset, topOpacity, topScale, false)
-					w.sidebarProjectsResizerWithOpacity(c, pal, resizerOpacity)
-					w.sidebarProjectsPanel(c, pal, h, false, upOffset, 1.0, 1.0, true)
-				} else {
-					// Projects moves DOWN (underneath), Tab moves UP (covers Projects from above)
-					w.sidebarProjectsPanel(c, pal, h, false, downOffset, topOpacity, topScale, false)
-					w.sidebarProjectsResizerWithOpacity(c, pal, resizerOpacity)
-					w.sidebarTabPanel(c, pal, 0, true, upOffset, 1.0, 1.0, true)
-				}
+			if w.sidebarProjectsOnTop {
+				// Default: Projects list on top, Tab views below
+				w.sidebarProjectsPanel(c, pal, h, false)
+				w.sidebarProjectsResizer(c, pal)
+				w.sidebarTabPanel(c, pal, 0, true)
 			} else {
-				// Normal static mode
-				if w.sidebarProjectsOnTop {
-					w.sidebarProjectsPanel(c, pal, h, false, 0, 1.0, 1.0, false)
-					w.sidebarProjectsResizer(c, pal)
-					w.sidebarTabPanel(c, pal, 0, true, 0, 1.0, 1.0, false)
-				} else {
-					w.sidebarTabPanel(c, pal, 0, true, 0, 1.0, 1.0, false)
-					w.sidebarProjectsResizer(c, pal)
-					w.sidebarProjectsPanel(c, pal, h, false, 0, 1.0, 1.0, false)
-				}
+				// Swapped: Tab views on top, Projects list below
+				w.sidebarTabPanel(c, pal, 0, true)
+				w.sidebarProjectsResizer(c, pal)
+				w.sidebarProjectsPanel(c, pal, h, false)
 			}
 		} else {
 			// Normal single panel mode with popover button
 			w.projectBar(c, pal)
-			w.sidebarTabPanel(c, pal, 0, true, 0, 1.0, 1.0, false)
+			w.sidebarTabPanel(c, pal, 0, true)
 		}
 
 		w.sidebarFooter(c, pal)
@@ -399,25 +326,12 @@ func (w *window) sidebarProjectsSwitch(c *ui.Context, pal *palette) {
 }
 
 // sidebarProjectsPanel renders the loaded projects list inside the sidebar split.
-func (w *window) sidebarProjectsPanel(c *ui.Context, pal *palette, h float32, grow bool, offset float32, opacity float32, scale float32, elevated bool) {
+func (w *window) sidebarProjectsPanel(c *ui.Context, pal *palette, h float32, grow bool) {
 	col := ui.Column(c).Padding(2, 6, 4, 6)
 	if grow {
 		col.Grow(1).FillHeight()
 	} else {
 		col.Height(h).Shrink(0)
-	}
-	if offset != 0 {
-		col.Top(offset)
-	}
-	if opacity > 0 && opacity < 1.0 {
-		col.Opacity(opacity)
-	}
-	if scale > 0 && scale != 1.0 {
-		col.Scale(scale, scale)
-	}
-	if elevated {
-		col.Background(pal.headerBg).Border(1, pal.cardBorder).Radius(8).
-			Shadow(0, 10, 26, 0, ui.RGBA(0, 0, 0, 0.32))
 	}
 	col.Children(func() {
 		w.projectListContent(c, pal, false)
@@ -425,7 +339,7 @@ func (w *window) sidebarProjectsPanel(c *ui.Context, pal *palette, h float32, gr
 }
 
 // sidebarTabPanel renders the search input and current tab content (files, history, pulls).
-func (w *window) sidebarTabPanel(c *ui.Context, pal *palette, h float32, grow bool, offset float32, opacity float32, scale float32, elevated bool) {
+func (w *window) sidebarTabPanel(c *ui.Context, pal *palette, h float32, grow bool) {
 	if w.tab == 2 && !w.gh.ok() {
 		w.tab = 0
 	}
@@ -434,19 +348,6 @@ func (w *window) sidebarTabPanel(c *ui.Context, pal *palette, h float32, grow bo
 		col.Grow(1).FillHeight()
 	} else {
 		col.Height(h).Shrink(0)
-	}
-	if offset != 0 {
-		col.Top(offset)
-	}
-	if opacity > 0 && opacity < 1.0 {
-		col.Opacity(opacity)
-	}
-	if scale > 0 && scale != 1.0 {
-		col.Scale(scale, scale)
-	}
-	if elevated {
-		col.Background(pal.headerBg).Border(1, pal.cardBorder).Radius(8).
-			Shadow(0, 10, 26, 0, ui.RGBA(0, 0, 0, 0.32))
 	}
 	col.Children(func() {
 		ui.Column(c).Padding(2, 10, 8).Shrink(0).Children(func() {
@@ -476,16 +377,8 @@ func (w *window) sidebarTabPanel(c *ui.Context, pal *palette, h float32, grow bo
 
 // sidebarProjectsResizer renders a horizontal splitter with a centered round swap button.
 func (w *window) sidebarProjectsResizer(c *ui.Context, pal *palette) {
-	w.sidebarProjectsResizerWithOpacity(c, pal, 1.0)
-}
-
-// sidebarProjectsResizerWithOpacity renders the splitter with specified opacity for transition.
-func (w *window) sidebarProjectsResizerWithOpacity(c *ui.Context, pal *palette, opacity float32) {
 	t := c.Theme()
 	row := ui.Row(c).Height(22).FillWidth().AlignItems(ui.Center).Shrink(0)
-	if opacity > 0 && opacity < 1.0 {
-		row.Opacity(opacity)
-	}
 
 	dragHandler := func(handle ui.Element) {
 		if _, dy, held := handle.Dragged(); held {
@@ -519,7 +412,6 @@ func (w *window) sidebarProjectsResizerWithOpacity(c *ui.Context, pal *palette, 
 			btn.Background(ui.RGBA(127, 127, 127, 0.15))
 		}
 		if btn.Clicked() {
-			w.swapAnimStart = time.Now()
 			w.sidebarProjectsOnTop = !w.sidebarProjectsOnTop
 			go state.setSidebarProjects(w.sidebarProjectsShown, w.sidebarProjectsHeight, w.sidebarProjectsOnTop)
 		}

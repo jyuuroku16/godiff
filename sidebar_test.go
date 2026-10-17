@@ -390,21 +390,24 @@ func TestSidebarProjectsSplitAndSwap(t *testing.T) {
 		t.Fatal("expected 'PROJECTS' restored in split mode")
 	}
 
-	// 5. Test Swap button click and transition animation
+	// 5. Test Swap button click (instant swap without animation)
 	if err := tt.Click("Swap sections"); err != nil {
 		t.Fatalf("failed to click swap button: %v", err)
 	}
 	if w.sidebarProjectsOnTop {
 		t.Fatal("expected sidebarProjectsOnTop to be false after swap click")
 	}
-	if w.swapAnimStart.IsZero() {
-		t.Fatal("expected swapAnimStart to be set for transition animation")
-	}
 
-	// Run animation frames
-	for frame := 0; frame < 5; frame++ {
-		tt.Frame()
+	tt.Frame()
+
+	// Click swap button again to swap back
+	if err := tt.Click("Swap sections"); err != nil {
+		t.Fatalf("failed to click swap button again: %v", err)
 	}
+	if !w.sidebarProjectsOnTop {
+		t.Fatal("expected sidebarProjectsOnTop to be true after second swap click")
+	}
+	tt.Frame()
 
 	// 6. Test Persistence
 	state.setSidebarProjects(false, 310, false)
